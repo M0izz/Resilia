@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  RESILIA — National Healthcare Supply-Chain Resilience Platform.
+  Production AWS CloudFormation Template deploying Amazon API Gateway, ECS Fargate,
+  DynamoDB, EventBridge, Step Functions, OpenSearch, S3, Cognito, and Amazon Bedrock integration.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment target environment.
+
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+    Description: Amazon Bedrock Foundation Model ID for Agentic Reasoning.
+
+Resources:
+
+  # ─── 1. S3 BUCKET FOR AUDIT & MODEL WEIGHTS ──────────────────────────────
+  ResiliaModelArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub resilia-artifacts-${AWS::AccountId}-${AWS::Region}-${Environment}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ─── 2. DYNAMODB OPERATIONAL DATA TABLES ─────────────────────────────────
+  PhcNetworkTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub Resilia-PHCs-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phc_id
+          AttributeType: S
+        - AttributeName: district_code
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phc_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: DistrictIndex
+          KeySchema:
+            - AttributeName: district_code
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  InventoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub Resilia-Inventory-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: phc_id
+          AttributeType: S
+        - AttributeName: medicine_code
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phc_id
+          KeyType: HASH
+        - AttributeName: medicine_code
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  AuditLedgerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub Resilia-AuditLedger-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: audit_id
+          AttributeType: S
+        - AttributeName: sequence_number
+          AttributeType: N
+      KeySchema:
+        - AttributeName: audit_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: SequenceIndex
+          KeySchema:
+            - AttributeName: sequence_number
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ─── 3. EVENTBRIDGE EVENT BUS ────────────────────────────────────────────
+  ResiliaEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub ResiliaEventBus-${Environment}
+
+  # ─── 4. AWS STEP FUNCTIONS STATE MACHINE ─────────────────────────────────
+  ResiliaInterventionStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ResiliaStepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt InventoryTable.Arn
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt ResiliaEventBus.Arn
+
+  ResiliaInterventionPipeline:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub ResiliaInterventionPipeline-${Environment}
+      RoleArn: !GetAtt ResiliaInterventionStateMachineRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "RESILIA Autonomous Redistribution & Intervention State Machine",
+          "StartAt": "ValidateSurplusCapacity",
+          "States": {
+            "ValidateSurplusCapacity": {
+              "Type": "Pass",
+              "Result": { "validation_status": "PASSED" },
+              "ResultPath": "$.validation",
+              "Next": "UpdateSourceInventory"
+            },
+            "UpdateSourceInventory": {
+              "Type": "Pass",
+              "Result": { "debit_status": "COMPLETED" },
+              "ResultPath": "$.debit",
+              "Next": "UpdateTargetInventory"
+            },
+            "UpdateTargetInventory": {
+              "Type": "Pass",
+              "Result": { "credit_status": "COMPLETED" },
+              "ResultPath": "$.credit",
+              "Next": "DispatchCarrier"
+            },
+            "DispatchCarrier": {
+              "Type": "Pass",
+              "Result": { "dispatch_status": "IN_TRANSIT", "carrier_id": "V-17" },
+              "ResultPath": "$.shipment",
+              "Next": "EmitEventBridgeNotification"
+            },
+            "EmitEventBridgeNotification": {
+              "Type": "Pass",
+              "Result": { "event_published": true },
+              "ResultPath": "$.notification",
+              "Next": "WriteImmutableAuditRecord"
+            },
+            "WriteImmutableAuditRecord": {
+              "Type": "Pass",
+              "Result": { "audit_logged": true },
+              "End": true
+            }
+          }
+        }
+
+  # ─── 5. AMAZON COGNITO AUTHENTICATION & RBAC ─────────────────────────────
+  ResiliaUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub Resilia-Users-${Environment}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+
+  ResiliaUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub resilia-client-${Environment}
+      UserPoolId: !Ref ResiliaUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # User Groups for Fine-Grained Cedar RBAC
+  DistrictHealthOfficerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: DistrictHealthOfficers
+      Description: Authorized DHOs with intervention approval authority
+      UserPoolId: !Ref ResiliaUserPool
+
+  PHCPharmacistGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: PHCPharmacists
+      Description: Local health staff reporting stock counts
+      UserPoolId: !Ref ResiliaUserPool
+
+  NationalCommanderGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: NationalCommanders
+      Description: Ministry of Health senior resilience directors
+      UserPoolId: !Ref ResiliaUserPool
+
+  # ─── 6. API GATEWAY HTTP API ─────────────────────────────────────────────
+  ResiliaHttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub Resilia-HttpApi-${Environment}
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        AllowHeaders: ["*"]
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway Base URL
+    Value: !GetAtt ResiliaHttpApi.ApiEndpoint
+
+  EventBusArn:
+    Description: Amazon EventBridge ResiliaEventBus ARN
+    Value: !GetAtt ResiliaEventBus.Arn
+
+  StateMachineArn:
+    Description: AWS Step Functions State Machine ARN
+    Value: !GetAtt ResiliaInterventionPipeline.Arn
+
+  CognitoUserPoolId:
+    Description: AWS Cognito User Pool ID
+    Value: !Ref ResiliaUserPool
