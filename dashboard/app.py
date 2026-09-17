@@ -1955,7 +1955,8 @@ def render_predictive_intelligence():
                         annotation_font_color="#F59E0B",
                     )
                     fig_dep.update_layout(
-                        **PLOTLY_LAYOUT, height=220,
+                        **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+                        height=220,
                         xaxis_title="Date",
                         yaxis_title="Stock (units)",
                         margin=dict(l=12, r=12, t=24, b=12),
@@ -2001,7 +2002,8 @@ def render_predictive_intelligence():
                 annotation_font_color="#EF4444",
             )
             fig_bed.update_layout(
-                **PLOTLY_LAYOUT, height=260,
+                **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("yaxis", "legend")},
+                height=260,
                 xaxis_title="Date", yaxis_title="Occupancy %",
                 yaxis=dict(range=[0, 110], gridcolor="rgba(255,255,255,0.05)"),
                 yaxis2=dict(
@@ -2909,7 +2911,7 @@ def render_crisis_twin_view():
         fig_net = go.Figure(
             data=[edge_trace, node_trace],
             layout=go.Layout(
-                **PLOTLY_LAYOUT,
+                **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("xaxis", "yaxis", "margin")},
                 title="Regional Healthcare Digital Twin Topology (Pune Hub)",
                 showlegend=False,
                 hovermode="closest",
