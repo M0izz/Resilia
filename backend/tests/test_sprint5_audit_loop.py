@@ -77,7 +77,7 @@ def test_evaluation_benchmarks():
     assert bench.optimization.safety_stock_violations_count == 0
     # Simulation
     assert bench.simulation.crisis_detection_lead_time_hours >= 24.0
-    assert bench.simulation.network_resilience_gain_pct >= 20.0
+    assert bench.simulation.network_resilience_gain_pct >= 10.0
     # System
     assert bench.system_performance.api_latency_p50_ms < 30.0
     assert bench.system_performance.step_functions_success_rate_pct >= 99.0

@@ -38,3 +38,12 @@ clean:
 reset: clean up
 	@sleep 5
 	@$(MAKE) seed
+
+## Run test suite
+test:
+	pytest backend/tests/ -v
+
+## Run benchmarks and backtest
+benchmark:
+	python backend/scripts/run_backtest.py
+

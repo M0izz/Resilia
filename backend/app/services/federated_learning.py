@@ -1,7 +1,28 @@
 """
-Federated Intelligence Service using Flower (flwr) concepts and PyTorch.
-Enables multi-district collaborative model training for outbreak and resource burn prediction
-without centralizing sensitive patient healthcare records.
+Federated Intelligence Service — RESILIA.
+
+PHASE 4 — FEDERATED LEARNING ACCURACY LABEL
+============================================
+STATUS: SYNTHETIC-DEMO ONLY.
+
+This module SIMULATES federated learning concepts (Flower / flwr architecture,
+FedAvg aggregation, per-round loss tracking) using SYNTHETIC data generated
+from the 75-PHC demo dataset.  It does NOT:
+  - Connect to a real Flower server or any real PHC endpoints
+  - Train on real patient records
+  - Produce weights that generalize to real-world clinical data
+
+What IS real:
+  - The PyTorch neural network architecture (SurgeBurnPredictor)
+  - The gradient descent training loop and FedAvg weight averaging
+  - The per-round loss and accuracy numbers (computed, not fabricated)
+  - The simulation of differential privacy noise (Gaussian DP)
+
+Enables multi-district collaborative model training for outbreak and resource
+burn prediction without centralizing sensitive patient healthcare records.
+In a real deployment this would use the Flower (flwr) federated learning
+framework with real PHC clients.  The architecture is designed to be
+drop-in compatible with Flower's Strategy API.
 """
 from __future__ import annotations
 import math

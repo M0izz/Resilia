@@ -5,6 +5,24 @@
 
 ---
 
+## ⚠️ What's Real vs. What's Simulated
+
+This table applies to **every quantitative claim** in this README. All benchmarks are computed on the bundled **synthetic 75-PHC demo dataset** — they are not from a live production deployment. The algorithms are real; the data they run on is representative, not production.
+
+| Component | Status | Details |
+| :--- | :--- | :--- |
+| FastAPI backend + routing | ✅ Real | Fully functional, production-quality |
+| In-memory 75-PHC dataset | ⚠️ Synthetic-Demo | Realistic but generated with `random.seed(42)` |
+| Ridge regression forecasting | ✅ Real algorithm | Walk-forward backtest computed at runtime |
+| OR-Tools SCIP MILP solver | ✅ Real | Actual solver; runtime measured with `time.perf_counter()` |
+| Federated learning (Flower/flwr) | ⚠️ Simulated | PyTorch training loop on synthetic data; no real FL server |
+| SimPy crisis simulation | ⚠️ Simulated | Discrete-event engine on synthetic PHC graph |
+| SHA-256 audit ledger | ✅ Real | Cryptographic chain computed at runtime |
+| AWS infra (DynamoDB, Step Functions) | ⚠️ Local/IaC | Uses DynamoDB Local; CloudFormation IaC is defined but not deployed |
+| All benchmark numbers in `/evaluation/benchmarks` | ⚠️ Computed on synthetic | Computed at request time from synthetic data; not from production |
+
+---
+
 ## 🌟 The 5-Sprint Evolution Story
 
 | Sprint | System Evolution | Core Question Answered | Technology Centerpiece |
@@ -24,7 +42,7 @@
 ## 🏛️ End-to-End System Architecture
 
 ```
-                                  [ Public Healthcare Network: 100 PHCs ]
+                                  [ Public Healthcare Network: 75 PHCs (Synthetic Demo) ]
                                                      │
                                                      ▼
                                      ┌───────────────────────────────┐
@@ -37,29 +55,29 @@
                                      │   🤖 SENTINEL AGENT (SENTRY)  │
                                      │ Multi-Factor Compound Scoring │
                                      └───────────────┬───────────────┘
-                                                     │ (Risk = 0.88 Escalated)
+                                                     │ (Risk Score: Computed from inventory/staff/supplier)
                                                      ▼
                                      ┌───────────────────────────────┐
                                      │   🔮 FORECAST AGENT (PREDICT) │
                                      │ 14-Day Demand & Stockout Date │
                                      └───────────────┬───────────────┘
-                                                     │ (Stockout in 4.2d, Deficit: 1,064)
+                                                     │ (Stockout date predicted via Ridge regression)
                                                      ▼
                                      ┌───────────────────────────────┐
                                      │  🌪️ CRISIS TWIN (SIMULATE)    │
                                      │ SimPy Cascading Failure Engine│
                                      └───────────────┬───────────────┘
-                                                     │ (11 Outages & Overflow Predicted)
+                                                     │ (Cascading impact computed on synthetic graph)
                                                      ▼
                                      ┌───────────────────────────────┐
                                      │  🧮 RESOURCE AGENT (OPTIMIZE) │
                                      │ Google OR-Tools SCIP MILP     │
                                      └───────────────┬───────────────┘
-                                                     │ (1,100 Units Transferred from Pimpri)
+                                                     │ (Optimal transfer plan solved in measured ms)
                                                      ▼
                                      ┌───────────────────────────────┐
                                      │  ⚡ RESPONSE AGENT (SYNTHESIS) │
-                                     │ Bedrock Clinical Justification│
+                                     │ Clinical Justification        │
                                      └───────────────┬───────────────┘
                                                      │
                                                      ▼
@@ -77,53 +95,79 @@
                                              ▼               ▼
                         ┌─────────────────────────┐     ┌─────────────────────────┐
                         │ 📜 IMMUTABLE AI AUDIT   │     │ 🌸 FEDERATED LEARNING   │
-                        │ SHA-256 Chained Ledger  │     │ Flower FedAvg Multi-Node│
+                        │ SHA-256 Chained Ledger  │     │ Flower FedAvg (Simulated)│
                         └─────────────────────────┘     └─────────────────────────┘
 ```
 
 ---
 
-## ⭐ The Canonical Judge Demonstration Flow
+## ⭐ The Canonical Demo Flow (Synthetic Dataset)
 
-In a single 60-second interactive scenario, RESILIA demonstrates the complete closed-loop transformation:
+In a single interactive scenario, RESILIA demonstrates the complete closed-loop transformation on the **synthetic 75-PHC dataset**. All numbers below are produced by the running code, not hardcoded:
 
-1. **Real-World Shock**: Post-monsoon Dengue surge (+42% footfall in Pune) coinciding with an NH-48 landslide delay (+48h).
-2. **Autonomous Sensing**: Telemetry reveals PHC Hadapsar ORS stock sinking to 320 units with daily consumption accelerating to 76.5 units/day.
-3. **Compound Risk Detection**: Sentinel Agent flags a non-linear compound risk score of **0.88 (CRITICAL)**.
-4. **Predictive Failure Horizon**: Forecast Agent pinpoints exact stockout at **T = 4.2 Days (September 20, 2026)**.
-5. **'What If?' Digital Twin Simulation**: SimPy models the 14-day network shock: status quo triggers **11 cascading facility stockouts** and overflows beds into Aundh District Hospital.
-6. **Mathematical Optimization**: OR-Tools SCIP Mixed-Integer Linear Programming solves in **14.8 ms**, allocating **1,100 units surplus from PHC Pimpri Hub** (28.5 km away) while leaving Pimpri with 18.7 days safety stock.
-7. **Human Governance**: District Health Officer Dr. Priya Sharma grants digital authorization after inspecting the 94% confidence clinical justification.
-8. **Automated Workflow Execution**: AWS Step Functions state machine debits Pimpri Hub, credits Hadapsar, and dispatches carrier V-17 (IN_TRANSIT, ETA 4.8h).
-9. **Measurable Impact & Audit**: Resilience score leaps from **58.5% to 86.2% (+27.7% gain)**, 11 stockouts are completely avoided, and the record is sealed with SHA-256 block hashing.
-10. **Continuous System Learning**: Flower FedAvg calibrates the global outbreak prediction model across 3 regional districts with **0 raw patient records shared**.
+1. **Real-World Shock**: Post-monsoon Dengue surge (+42% footfall in Pune) coinciding with an NH-48 supplier delay.
+2. **Autonomous Sensing**: Telemetry reveals PHC Hadapsar ORS stock in CRITICAL status (< 2 days of stock at current consumption).
+3. **Compound Risk Detection**: Sentinel Agent computes a compound risk score from inventory + bed occupancy + staffing + supplier delay factors.
+4. **Predictive Failure Horizon**: Forecast Agent's Ridge regression model predicts exact stockout date within the 14-day horizon.
+5. **'What If?' Digital Twin Simulation**: SimPy discrete-event engine models cascading facility impacts on the synthetic PHC network graph.
+6. **Mathematical Optimization**: OR-Tools SCIP MILP solver allocates surplus from PHC Pimpri Hub, runtime measured live with `time.perf_counter()`.
+7. **Human Governance**: District Health Officer grants digital authorization.
+8. **Automated Workflow**: Step Functions state machine debits source, credits target, dispatches carrier.
+9. **Measurable Impact & Audit**: Resilience score delta computed from pre/post risk scores; sealed with SHA-256 block hash.
+10. **Continuous Learning**: Flower FedAvg simulates multi-district collaborative training with **0 raw patient records shared** (differential privacy).
 
 ---
 
-## 📊 Empirical Quantitative Benchmarks
+## 📊 Quantitative Benchmarks ⚠️ COMPUTED ON SYNTHETIC DATA
 
-| Pillar | Metric | Measured Value | Industry Baseline |
+> All values below are computed at runtime by `GET /evaluation/benchmarks`. They reflect algorithm performance on the **synthetic 75-PHC demo dataset** — NOT a production deployment. The response carries `"data_source": "SYNTHETIC-DEMO"` and an explicit `"disclaimer"` field.
+
+To reproduce these numbers locally:
+
+```bash
+cd backend && python -m uvicorn app.main:app --port 8000
+curl http://localhost:8000/evaluation/benchmarks | python -m json.tool
+```
+
+| Pillar | Metric | How It's Computed | Example Range (synthetic) |
 | :--- | :--- | :--- | :--- |
-| **Forecasting** | Stockout Date Accuracy | **94.6%** | 82.0% |
-| | Advance Warning Lead Time | **4.2 days** | 1.5 days |
-| | Mean Absolute Error (MAE) | **4.12 units** | 8.5 units |
-| **Optimization** | Anticipated Deficit Reduction | **91.2%** | 65.0% |
-| | Google OR-Tools SCIP Runtime | **14.8 ms** | 1,200 ms |
-| | Fleet Response ETA | **4.8 hours** | 24.0 hours |
-| | Logistics Cost Reduction | **34.8%** | Emergency Charter |
-| **Simulation** | Crisis Detection Lead Time | **36.5 hours** | 0 hours (Reactive) |
-| | Resilience Index Boost | **+27.7%** | 0% (Collapse) |
-| | Cascading Facility Outages Averted | **11 facilities (100%)** | 0 |
-| | Care Episodes Safeguarded | **1,365 patients** | Unmet Demand |
-| **AWS System** | API Latency (p50 / p99) | **18.2 ms / 64.0 ms** | < 100 ms |
-| | Step Functions Reliability | **99.8%** | 99.0% |
-| | Zero-Leakage Privacy | **0 Raw Records Pooled** | Full Centralization |
+| **Forecasting** | Stockout Prediction Accuracy | TP+TN / total inventory items (status vs. DOS threshold) | 70–95% |
+| | Walk-forward MAE | 7-day held-out backtest on patient history | 5–20 patients/day |
+| | Precision / Recall | TP/(TP+FP), TP/(TP+FN) on LOW/CRITICAL flags | 60–95% |
+| **Optimization** | Shortage Reduction | Available surplus / flagged deficit for ORS-001 | 50–100% |
+| | OR-Tools Solver Runtime | `time.perf_counter()` on actual micro-solve | 0.1–50 ms |
+| | Constraint Satisfaction | Routes respecting safety-stock and vehicle-capacity | ~100% |
+| **Simulation** | Crisis Detection Lead Time | Days-of-stock × 24h for flagged items | 24–168 hours |
+| | Resilience Gain | (pre_risk - post_risk) / pre_risk after modelled intervention | 10–35% |
+| | Safeguarded Patients | Avg daily visits × 14 days at high-risk PHCs | 500–3,000 |
+| **System** | Store Latency p50 | 5 measured `in_memory_store` probes + HTTP overhead | < 50 ms |
+| | Audit Success Rate | Successful audit records / total (from audit ledger) | Varies |
+
+*Methodology: see `backend/scripts/run_backtest.py` — regenerate with `make benchmark`.*
+
+---
+
+## 🔍 What's Real vs. Simulated
+
+To ensure complete transparency during technical evaluation, here is the exact breakdown of implemented components and their data provenance:
+
+| Component | Status | Provenance & Implementation Details |
+| :--- | :--- | :--- |
+| **Mathematical Optimization** | **REAL** | Powered by **Google OR-Tools (SCIP MILP solver)** in `backend/app/services/optimization_engine.py`. Solves multi-facility supply allocation, vehicle capacity, and safety-stock constraints with real wall-clock timing (`time.perf_counter()`). |
+| **Forecasting Engine** | **REAL ALGORITHM** | Real Scikit-Learn **Ridge regression** with rolling features in `backend/app/services/forecast_engine.py`. Backtested using walk-forward cross-validation on time-series records. |
+| **Cryptographic Audit Ledger** | **REAL** | Full SHA-256 hash chaining with verifiable cryptographic pointers in `backend/app/services/audit_service.py`. Verifiable via `GET /audit/verify-integrity`. |
+| **Healthcare & Patient Data** | **SYNTHETIC** | All 75 Primary Healthcare Centres (PHCs), inventory levels, consumption rates, and 30-day OPD/IPD visits are procedurally generated using Maharashtra geographic coordinates (`data/seed_db.py` / `in_memory_store.py`). No real patient or private hospital data is used. |
+| **Data Storage Layer** | **HYBRID** | Supports both **AWS DynamoDB** (local or cloud) and automatic thread-safe in-memory fallback (`in_memory_store.py`). When DynamoDB is unreachable, the system continues running on the in-memory graph and visibly tags all API responses with `"data_source": "SYNTHETIC-DEMO"`. |
+| **Demo Scenario** | **HYBRID** | The canonical Pune Dengue Surge (PHC Hadapsar ORS stockout) is a curated storyline demonstrating the full 10-step agent loop (`scenario_type: scripted_demo`). In addition, the live pipeline accepts arbitrary PHC and medicine inputs via `POST /agentic-loop/run` or the interactive dashboard. |
+| **Federated Learning** | **MECHANISM DEMO** | Implements the **Flower FedAvg** orchestration pattern with differential privacy clipping in `backend/app/services/federated_learning.py`. Demonstrates multi-district parameter exchange without centralizing records; not yet trained on clinical telemetry. |
+| **AWS Cloud Infrastructure** | **IaC SPECIFICATION** | Full AWS topology is defined via CloudFormation in `infra/resilia-cloudformation.yml`. For local development and hackathon demonstration, services run containerized via `docker-compose.yml`. |
 
 ---
 
 ## 📜 Security & Cryptographic AI Decision Trail
 
-Every clinical intervention committed by RESILIA permanently answers the 7 mandatory explainability questions:
+Every clinical intervention committed by RESILIA permanently answers 7 mandatory explainability questions:
+
 - **What happened?** Clinical/logistics trigger summary.
 - **Why was it flagged?** Multi-factor compound risk parameters and surge multiplier.
 - **Which model predicted it?** Versioned identifier of the forecasting algorithm.
@@ -135,14 +179,14 @@ Every clinical intervention committed by RESILIA permanently answers the 7 manda
 
 ---
 
-## ☁️ AWS Cloud Production Topology
+## ☁️ AWS Cloud Production Topology (IaC — Not Yet Deployed)
 
-RESILIA is fully cloud-native, defined via Infrastructure as Code in `infra/resilia-cloudformation.yml`:
-- **Amazon API Gateway (HTTP API)**: High-throughput, sub-20ms edge gateway with Cognito JWT authorizer.
-- **Amazon Bedrock**: Foundation model inference (Claude 3.5 Sonnet / Titan) for clinical reasoning.
+RESILIA is designed to be fully cloud-native, defined via Infrastructure as Code in `infra/resilia-cloudformation.yml`. The current repo runs against **DynamoDB Local** via docker-compose. A real AWS deployment would use:
+
 - **Amazon DynamoDB**: Serverless operational persistence with Global Secondary Indexes for single-digit ms reads.
 - **Amazon EventBridge**: Reactive event bus decoupling telemetry from agent intervention loops.
 - **AWS Step Functions**: Distributed state machine orchestrating physical inventory updates and carrier dispatches.
+- **Amazon API Gateway**: High-throughput edge gateway.
 - **Amazon OpenSearch & S3**: Semantic search across incident histories and encrypted storage for model checkpoints.
 - **AWS Cognito & Cedar RBAC**: Fine-grained access control separating District Health Officers, Pharmacists, and National Commanders.
 
@@ -151,6 +195,7 @@ RESILIA is fully cloud-native, defined via Infrastructure as Code in `infra/resi
 ## 🚀 Quickstart Guide
 
 ### 1. Run with Docker Compose (Recommended)
+
 ```bash
 # Clone and start all services (DynamoDB local, FastAPI backend, Streamlit dashboard)
 docker compose up -d
@@ -159,7 +204,10 @@ docker compose up -d
 # FastAPI Swagger docs at: http://localhost:8000/docs
 ```
 
+> **Note:** `dynamodb_local.zip` is no longer committed to this repo. Docker Compose pulls the official `amazon/dynamodb-local` image automatically. The API will operate on the in-memory synthetic dataset if DynamoDB Local is unavailable, and will show a `⚠️ SYNTHETIC DEMO DATA` banner in the dashboard.
+
 ### 2. Run Locally Outside Docker
+
 ```bash
 # Backend Setup
 cd backend
@@ -168,26 +216,30 @@ python -m uvicorn app.main:app --reload --port 8000
 
 # Dashboard Setup (in a separate terminal)
 cd dashboard
-pip install -r requirements.txt
+pip install streamlit plotly pandas numpy requests
 streamlit run app.py
 ```
 
 ### 3. Run Test Suite
+
 ```bash
 cd backend
 python -m pytest tests/ -v
-# 9 passed across all 5 sprint test suites in < 10 seconds!
+
+# Phase 5 unit tests with real assertions:
+python -m pytest tests/test_phase5_unit.py -v
 ```
 
 ---
 
 ## 🌐 FastAPI Core Endpoints
 
-- **`POST /demo/run-canonical-scenario`**: Execute the single unified 10-phase judge demonstration scenario.
+- **`POST /demo/run-canonical-scenario`**: Execute the single unified 10-phase judge demonstration scenario (synthetic data).
 - **`GET /demo/canonical-scenario-status`**: Retrieve the latest canonical demonstration report and evidence metrics.
 - **`POST /crisis/simulate`**: Execute SimPy discrete-event digital twin stress simulation (Baseline vs. Mitigated).
-- **`POST /crisis/federated/train`**: Run Flower FedAvg multi-district collaborative training with Differential Privacy.
+- **`POST /crisis/federated/train`**: Run Flower FedAvg multi-district collaborative training with Differential Privacy (simulated).
 - **`POST /optimization/plan`**: Formulate Google OR-Tools SCIP Mixed-Integer Linear Programming redistribution plan.
 - **`POST /agentic-loop/run`**: Trigger the complete 10-phase autonomous agentic loop.
 - **`GET /audit/verify-integrity`**: Cryptographically verify SHA-256 hash chain signatures across the audit ledger.
-- **`GET /evaluation/benchmarks`**: Retrieve real empirical scorecard across all 4 operational pillars.
+- **`GET /evaluation/benchmarks`**: Retrieve computed scorecard across all 4 operational pillars (includes `data_source` and `disclaimer` fields).
+- **`GET /health`**: Liveness check — includes `data_source: LIVE | SYNTHETIC-IN-MEMORY` and `dynamodb_online` fields.
