@@ -1223,6 +1223,50 @@ with st.sidebar:
     view = st.session_state.get("nav_view", "Home")
 
 
+# ─── Phase 2: Data Source Banner ─────────────────────────────────────────
+# Polls /health to determine if we are on LIVE or SYNTHETIC-IN-MEMORY data.
+# Only shown once per session (dismiss with the × button).
+
+if "data_source_banner_dismissed" not in st.session_state:
+    st.session_state["data_source_banner_dismissed"] = False
+
+if not st.session_state["data_source_banner_dismissed"]:
+    _health = api_get_nocache("/health") or {}
+    _data_src = _health.get("data_source", "SYNTHETIC-IN-MEMORY")
+    if _data_src != "LIVE":
+        _disclaimer = _health.get(
+            "disclaimer",
+            "DynamoDB Local is offline. This dashboard is operating on the bundled "
+            "synthetic 75-PHC demo dataset. Data shown is NOT from a live deployment."
+        )
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, rgba(245,158,11,0.12), rgba(245,158,11,0.06));
+            border: 1px solid rgba(245,158,11,0.45);
+            border-left: 4px solid #F59E0B;
+            border-radius: 10px;
+            padding: 12px 18px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        ">
+            <span style="font-size:1.1rem;margin-top:1px;">⚠️</span>
+            <div>
+                <span style="color:#FBBF24;font-weight:700;font-size:0.88rem;letter-spacing:0.04em;">
+                    SYNTHETIC DEMO DATA
+                </span>
+                <p style="color:#D1D5DB;font-size:0.82rem;margin:3px 0 0 0;line-height:1.5;">
+                    {_disclaimer}
+                </p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("✕ Dismiss", key="dismiss_synthetic_banner", type="secondary"):
+            st.session_state["data_source_banner_dismissed"] = True
+            st.rerun()
+
+
 # ─── Data loading ─────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=120, show_spinner=False)

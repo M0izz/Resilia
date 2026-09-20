@@ -2,7 +2,13 @@
 DynamoDB client, table registry, and CRUD helpers for RESILIA.
 All operations support DynamoDB Local (dev) and real AWS DynamoDB (prod)
 transparently via the endpoint_url setting.
+
+Phase 2 — Silent Fallback: every response from a ResilientTableWrapper
+will carry `data_source` = 'LIVE' or 'SYNTHETIC-IN-MEMORY' so that the
+dashboard and API callers can surface an appropriate disclaimer banner.
 """
+from __future__ import annotations
+from typing import Optional
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
@@ -12,6 +18,15 @@ from app.db.in_memory_store import in_memory_store
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_data_source() -> str:
+    """Return 'LIVE' when DynamoDB is online, 'SYNTHETIC-IN-MEMORY' otherwise.
+
+    This value should be included in all API responses so that the dashboard
+    can display a clear disclaimer banner when operating on synthetic data.
+    """
+    return "LIVE" if is_dynamodb_online() else "SYNTHETIC-IN-MEMORY"
 
 
 # ─── Client factories ──────────────────────────────────────────────────────
