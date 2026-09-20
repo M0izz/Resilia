@@ -1,0 +1,77 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+*.env
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.coveragerc
+
+# ============================================================
+# Archives & large binaries (never commit these)
+# ============================================================
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tgz
+
+# DynamoDB local — use docker-compose to pull the official image instead
+dynamodb_local.zip
+dynamodb_local_latest.tar.gz
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Jupyter
+# ============================================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================================
+# Secrets & credentials — NEVER commit
+# ============================================================
+*.pem
+*.key
+*.p12
+secrets.json
+credentials.json
+
+# ============================================================
+# Logs & temp files
+# ============================================================
+*.log
+*.tmp
+*.bak
+logs/
+tmp/

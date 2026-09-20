@@ -1,0 +1,78 @@
+name: Resilia CI
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Backend: lint + unit tests
+  # ──────────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check app/ --select E,F,W --ignore E501
+
+      - name: Run backend tests
+        env:
+          USE_IN_MEMORY: "true"
+          AWS_DEFAULT_REGION: "ap-south-1"
+          AWS_ACCESS_KEY_ID: "test"
+          AWS_SECRET_ACCESS_KEY: "test"
+        run: |
+          pip install pytest pytest-asyncio httpx
+          pytest tests/ -v --tb=short
+
+  # ──────────────────────────────────────────────
+  # Dashboard: import-smoke test (no browser)
+  # ──────────────────────────────────────────────
+  dashboard-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dashboard dependencies
+        run: |
+          pip install streamlit plotly pandas numpy requests
+
+      - name: Check dashboard syntax
+        run: python -m py_compile dashboard/app.py && echo "Syntax OK"
+
+  # ──────────────────────────────────────────────
+  # Docker Compose: verify config is valid
+  # ──────────────────────────────────────────────
+  docker-compose-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
