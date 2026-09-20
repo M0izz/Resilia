@@ -11,6 +11,8 @@ import requests
 import sys
 import socket
 import time
+import json
+import streamlit.components.v1 as components
 from datetime import datetime
 
 # ─── Config ───────────────────────────────────────────────────────────────
@@ -21,6 +23,7 @@ if backend_dir not in sys.path:
 
 API_BASE = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", os.environ.get("MAPBOX_ACCESS_TOKEN", "")).strip()
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
 
 st.set_page_config(
     page_title="RESILIA — National Healthcare Resilience Platform",
@@ -293,6 +296,30 @@ html, body, [class*="css"] {
 .bento-delta-green { color: #34D399 !important; }
 .bento-delta-red { color: #F87171 !important; }
 .bento-delta-blue { color: #38BDF8 !important; }
+
+/* ── Live Alerts Independent Scroll Container ── */
+.live-alerts-scroll-container {
+    max-height: 442px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-right: 4px !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.03) !important;
+}
+.live-alerts-scroll-container::-webkit-scrollbar {
+    width: 5px !important;
+}
+.live-alerts-scroll-container::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border-radius: 4px !important;
+}
+.live-alerts-scroll-container::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2) !important;
+    border-radius: 4px !important;
+}
+.live-alerts-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.35) !important;
+}
 
 /* ── Modern Tabs ── */
 [data-testid="stTabs"] [role="tablist"] {
@@ -1252,7 +1279,7 @@ def render_kpi_strip(summary: dict):
     alerts = summary.get("active_alerts", 0)
 
     st.markdown(f"""
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-bottom:20px;">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(145px, 1fr)); gap:12px; margin-bottom:20px;">
         <div class="bento-metric-card">
             <div class="bento-label">FACILITIES MONITORED</div>
             <div class="bento-value">{tot_phcs}</div>
@@ -1432,71 +1459,510 @@ def render_alert_feed(alerts: list[dict], max_items: int = 8):
 #  TAB 1 — COMMAND CENTER
 # ══════════════════════════════════════════════════════════════════════════
 
+# ─── Shared component: Google Maps PHC View ───────────────────────────────
+
+def render_google_maps_phc_view(phcs: list[dict], height: int = 480):
+    if not phcs:
+        st.info("No facility geospatial data to display.")
+        return
+
+    api_key = (st.session_state.get("google_maps_api_key") or GOOGLE_MAPS_API_KEY or "").strip()
+
+    # Prepare existing PHC data without any fabrication
+    markers_payload = []
+    for p in phcs:
+        lat = p.get("lat")
+        lng = p.get("lng")
+        if lat is not None and lng is not None:
+            try:
+                markers_payload.append({
+                    "id": str(p.get("id", "")),
+                    "name": str(p.get("name", "PHC")),
+                    "district": str(p.get("district", "")),
+                    "state": str(p.get("state", "")),
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "severity": str(p.get("risk_severity", "LOW")).upper(),
+                    "score": round(float(p.get("risk_score", 0.0)), 2),
+                    "alerts": int(p.get("active_alerts", 0)),
+                    "beds": int(p.get("beds_total", 20)),
+                    "occupancy_rate": round(float(p.get("bed_occupancy_rate", 50.0)), 1),
+                })
+            except (ValueError, TypeError):
+                continue
+
+    markers_json = json.dumps(markers_payload)
+    api_script_param = f"key={api_key}&" if api_key else ""
+
+    html_code = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        html, body {{
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #080D1A;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        #map {{
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            background: #080D1A;
+        }}
+        /* InfoWindow Custom Dark Styling */
+        .gm-style .gm-style-iw-c {{
+            background-color: #0E162B !important;
+            color: #F8FAFC !important;
+            border: 1px solid rgba(255, 255, 255, 0.14) !important;
+            border-radius: 8px !important;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
+            padding: 12px 14px !important;
+        }}
+        .gm-style .gm-style-iw-tc::after {{
+            background: #0E162B !important;
+        }}
+        .gm-style .gm-style-iw-d {{
+            overflow: auto !important;
+        }}
+        .gm-ui-hover-effect {{
+            filter: invert(1) !important;
+        }}
+        /* Suppress Google Maps keyless modal overlay */
+        .gm-err-container, .gm-err-autocomplete, div[class*="gm-err"], div[style*="z-index: 100000"] {{
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }}
+        /* Map floating operational legend */
+        .map-floating-legend {{
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(14, 22, 43, 0.94);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 5px 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 5;
+            font-size: 11px;
+            color: #94A3B8;
+        }}
+        .legend-chip {{
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+        }}
+        .legend-dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }}
+    </style>
+</head>
+<body>
+    <div class="map-floating-legend">
+        <span style="font-weight: 700; color: #F8FAFC; letter-spacing: 0.3px;">PHC GRID:</span>
+        <div class="legend-chip"><span class="legend-dot" style="background: #10B981;"></span> Normal</div>
+        <div class="legend-chip"><span class="legend-dot" style="background: #3B82F6;"></span> Medium</div>
+        <div class="legend-chip"><span class="legend-dot" style="background: #F59E0B;"></span> High</div>
+        <div class="legend-chip"><span class="legend-dot" style="background: #EF4444;"></span> Critical</div>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?{api_script_param}libraries=places,marker&callback=initGoogleMap" async defer></script>
+
+    <script>
+        const darkMapStyles = [
+            {{ "elementType": "geometry", "stylers": [{{ "color": "#0d1527" }}] }},
+            {{ "elementType": "labels.text.stroke", "stylers": [{{ "color": "#080d1a" }}] }},
+            {{ "elementType": "labels.text.fill", "stylers": [{{ "color": "#94a3b8" }}] }},
+            {{ "featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{{ "color": "#cbd5e1" }}] }},
+            {{ "featureType": "administrative.country", "elementType": "geometry.stroke", "stylers": [{{ "color": "#3b82f6" }}, {{ "weight": 1.2 }}] }},
+            {{ "featureType": "administrative.province", "elementType": "geometry.stroke", "stylers": [{{ "color": "#334155" }}, {{ "weight": 0.8 }}] }},
+            {{ "featureType": "poi", "stylers": [{{ "visibility": "off" }}] }},
+            {{ "featureType": "road", "elementType": "geometry", "stylers": [{{ "color": "#1e293b" }}] }},
+            {{ "featureType": "road", "elementType": "geometry.stroke", "stylers": [{{ "color": "#0f172a" }}] }},
+            {{ "featureType": "road.highway", "elementType": "geometry", "stylers": [{{ "color": "#283449" }}] }},
+            {{ "featureType": "transit", "stylers": [{{ "visibility": "off" }}] }},
+            {{ "featureType": "water", "elementType": "geometry", "stylers": [{{ "color": "#080d1a" }}] }},
+            {{ "featureType": "water", "elementType": "labels.text.fill", "stylers": [{{ "color": "#475569" }}] }}
+        ];
+
+        const SEV_COLORS = {{
+            "CRITICAL": "#EF4444",
+            "HIGH": "#F59E0B",
+            "MEDIUM": "#3B82F6",
+            "WATCH": "#3B82F6",
+            "LOW": "#10B981",
+            "NORMAL": "#10B981"
+        }};
+
+        const phcRecords = {markers_json};
+
+        function initGoogleMap() {{
+            const defaultCenter = {{ lat: 21.8, lng: 79.5 }};
+            const map = new google.maps.Map(document.getElementById("map"), {{
+                zoom: 4.8,
+                center: defaultCenter,
+                styles: darkMapStyles,
+                mapTypeId: google.maps.MapTypeId.ROADMAP,
+                backgroundColor: "#080D1A",
+                streetViewControl: false,
+                mapTypeControl: true,
+                mapTypeControlOptions: {{
+                    style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+                    position: google.maps.ControlPosition.TOP_RIGHT
+                }},
+                zoomControl: true,
+                fullscreenControl: true
+            }});
+
+            const infoWindow = new google.maps.InfoWindow({{
+                maxWidth: 280
+            }});
+
+            const markers = [];
+
+            phcRecords.forEach(p => {{
+                const color = SEV_COLORS[p.severity] || "#10B981";
+                const isCrit = p.severity === "CRITICAL";
+                const isHigh = p.severity === "HIGH";
+
+                const marker = new google.maps.Marker({{
+                    position: {{ lat: p.lat, lng: p.lng }},
+                    map: map,
+                    title: p.name + " (" + p.severity + ")",
+                    icon: {{
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: isCrit ? 9 : (isHigh ? 7.5 : 6),
+                        fillColor: color,
+                        fillOpacity: 0.95,
+                        strokeColor: isCrit ? "#FFFFFF" : "#0E162B",
+                        strokeWeight: isCrit ? 2 : 1.5
+                    }}
+                }});
+
+                marker.addListener("click", () => {{
+                    const badgeBg = color + "22";
+                    const content = `
+                        <div style="font-family:'Plus Jakarta Sans',-apple-system,sans-serif; color:#F8FAFC; line-height:1.4;">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                                <div style="font-weight:700; font-size:13px; color:#FFFFFF;">${{p.name}}</div>
+                                <span style="background:${{badgeBg}}; color:${{color}}; border:1px solid ${{color}}66; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; margin-left:8px;">${{p.severity}}</span>
+                            </div>
+                            <div style="color:#94A3B8; font-size:11px; margin-bottom:8px;">${{p.district}}, ${{p.state}} &bull; <span style="font-family:monospace; color:#CBD5E1;">${{p.id}}</span></div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; border-top:1px solid rgba(255,255,255,0.1); padding-top:6px;">
+                                <div><span style="color:#64748B;">Beds:</span> <b>${{p.beds}}</b> (${{p.occupancy_rate}}%)</div>
+                                <div><span style="color:#64748B;">Active Alerts:</span> <b style="color:${{p.alerts > 0 ? '#F59E0B' : '#10B981'}};">${{p.alerts}}</b></div>
+                                <div><span style="color:#64748B;">Risk Score:</span> <b>${{p.score}}</b></div>
+                                <div><span style="color:#64748B;">Status:</span> <span style="color:#10B981; font-weight:600;">Operational</span></div>
+                            </div>
+                        </div>
+                    `;
+                    infoWindow.setContent(content);
+                    infoWindow.open(map, marker);
+                }});
+
+                markers.push(marker);
+            }});
+
+            // Auto dismiss developer warning modal if shown
+            const modalObserver = new MutationObserver(() => {{
+                const okBtn = document.querySelector('.dismissButton') || 
+                              Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.trim() === 'OK');
+                if (okBtn) {{
+                    okBtn.click();
+                }}
+            }});
+            modalObserver.observe(document.body, {{ childList: true, subtree: true }});
+
+            // Initialize marker clustering if library is loaded
+            if (typeof markerClusterer !== "undefined" && markerClusterer.MarkerClusterer) {{
+                new markerClusterer.MarkerClusterer({{
+                    map: map,
+                    markers: markers
+                }});
+            }}
+        }}
+
+        // Catch authentication errors gracefully
+        window.gm_authFailure = function() {{
+            const mapDiv = document.getElementById("map");
+            if (mapDiv) {{
+                const msg = document.createElement("div");
+                msg.style = "position:absolute; bottom:12px; left:12px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); color:#FCA5A5; padding:8px 12px; border-radius:6px; font-size:11px; z-index:10;";
+                msg.innerHTML = "<b>Google Maps Notice:</b> Set <code>GOOGLE_MAPS_API_KEY</code> with Maps JavaScript API enabled to activate licensed mode.";
+                mapDiv.appendChild(msg);
+            }}
+        }};
+    </script>
+</body>
+</html>"""
+
+    components.html(html_code, height=height, scrolling=False)
+
+
+# ─── Shared component: Independently Scrollable Alert Feed ────────────────
+
+def render_alert_feed_scrollable(alerts: list[dict], height: int = 445):
+    if not alerts:
+        st.markdown(
+            f'<div style="height:{height}px; display:flex; align-items:center; justify-content:center; background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-radius:8px; color:#64748B; font-size:0.85rem;">No active alerts at this time.</div>',
+            unsafe_allow_html=True
+        )
+        return
+
+    items_html = []
+    sev_borders = {
+        "CRITICAL": "#EF4444",
+        "HIGH": "#F59E0B",
+        "MEDIUM": "#3B82F6",
+        "WATCH": "#3B82F6",
+        "LOW": "#10B981",
+        "NORMAL": "#10B981"
+    }
+    sev_bgs = {
+        "CRITICAL": "rgba(239, 68, 68, 0.12)",
+        "HIGH": "rgba(245, 158, 11, 0.12)",
+        "MEDIUM": "rgba(59, 130, 246, 0.12)",
+        "WATCH": "rgba(59, 130, 246, 0.12)",
+        "LOW": "rgba(16, 185, 129, 0.12)",
+        "NORMAL": "rgba(16, 185, 129, 0.12)"
+    }
+
+    for alert in alerts:
+        sev = alert.get("severity", "LOW").upper()
+        color = sev_borders.get(sev, "#3B82F6")
+        bg = sev_bgs.get(sev, "rgba(59, 130, 246, 0.12)")
+        created = alert.get("created_at", "")[:16].replace("T", " ")
+        title = alert.get("title", "Alert")
+        phc_name = alert.get("phc_name", "")
+        district = alert.get("district", "")
+        msg = alert.get("message", "")[:130]
+        if len(alert.get("message", "")) > 130:
+            msg += "…"
+
+        item = f'<div style="background:#0E162B; border:1px solid rgba(255,255,255,0.07); border-left:3px solid {color}; border-radius:6px; padding:10px 12px; margin-bottom:8px;"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"><span style="font-size:0.8rem; font-weight:700; color:#F8FAFC;">{title}</span><span style="background:{bg}; color:{color}; border:1px solid {color}44; padding:1px 6px; border-radius:3px; font-size:0.68rem; font-weight:700;">{sev}</span></div><div style="font-size:0.73rem; color:#94A3B8; margin-bottom:4px;"><span style="color:#CBD5E1; font-weight:500;">{phc_name}</span> &bull; {district} &bull; <span style="color:#64748B;">{created}</span></div><div style="font-size:0.73rem; color:#64748B; line-height:1.35;">{msg}</div></div>'
+        items_html.append(item)
+
+    all_alerts_content = "".join(items_html)
+
+    st.markdown(
+        f'<div style="max-height:{height}px; height:{height}px; overflow-y:auto; overflow-x:hidden; padding-right:4px;" class="live-alerts-scroll-container">{all_alerts_content}</div>',
+        unsafe_allow_html=True
+    )
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TAB 1 — COMMAND CENTER
+# ══════════════════════════════════════════════════════════════════════════
+
 def render_command_center():
-    st.markdown("##  National Healthcare Command Center")
+    st.markdown("""
+    <div style="margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h1 style="font-size:1.75rem; font-weight:800; color:#FFFFFF; margin:0; letter-spacing:-0.02em;">
+                    National Healthcare Command Center
+                </h1>
+                <div style="color:#94A3B8; font-size:0.84rem; margin-top:4px;">
+                    Real-time situational awareness, Google Maps geospatial surveillance, and sentinel risk analytics
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="display:inline-flex; align-items:center; gap:6px; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); color:#34D399; font-size:0.75rem; font-weight:700; padding:4px 10px; border-radius:6px;">
+                    <span style="width:7px; height:7px; border-radius:50%; background:#10B981;"></span>
+                    GRID SYNCHRONIZED
+                </span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     summary = load_network_summary(selected_state_code)
     if not summary:
-        st.warning("WARNING:  Could not load network summary. Is the backend running?")
+        st.warning("WARNING: Could not load network summary. Is the backend running?")
         return
 
-    # KPI strip
+    # 1. Key operational metrics (KPI strip)
     render_kpi_strip(summary)
     st.write("")
 
-    # Map + alert feed columns
-    map_col, alert_col = st.columns([2, 1])
+    # 2. Main Middle Section: Google Maps + Independently Scrollable Live Alerts
+    map_col, alert_col = st.columns([0.65, 0.35])
 
     with map_col:
+        st.markdown("""
+        <div style="background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-radius:8px 8px 0 0; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">Geospatial PHC Surveillance Map</div>
+                <div style="font-size:0.75rem; color:#94A3B8;">Official Google Maps Platform &bull; Active India Health Grid</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <span style="background:rgba(59,130,246,0.15); color:#60A5FA; border:1px solid rgba(59,130,246,0.3); padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:700;">GOOGLE MAPS PLATFORM</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         phcs = load_phcs(selected_state_code, district_code)
-        fig  = render_phc_map(phcs, "PHC Network")
-        if fig.data:
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        if phcs:
+            render_google_maps_phc_view(phcs, height=480)
         else:
             st.info("No PHC data to display. Run the seed script to populate the database.")
 
+        with st.expander("🔑 Google Maps Platform Configuration (Optional API Key)", expanded=False):
+            c_k1, c_k2 = st.columns([3, 1])
+            with c_k1:
+                user_key = st.text_input(
+                    "Google Maps API Key",
+                    value=st.session_state.get("google_maps_api_key", GOOGLE_MAPS_API_KEY),
+                    type="password",
+                    placeholder="AIzaSy...",
+                    help="Loaded from GOOGLE_MAPS_API_KEY environment variable. Enter a custom key here if needed."
+                )
+                if user_key != st.session_state.get("google_maps_api_key"):
+                    st.session_state["google_maps_api_key"] = user_key
+                    os.environ["GOOGLE_MAPS_API_KEY"] = user_key
+            with c_k2:
+                st.caption("Status:")
+                if user_key:
+                    st.success("API Key Active")
+                else:
+                    st.info("Dev/Preview Mode")
+
     with alert_col:
-        st.markdown("###  Live Alerts")
-        alerts = load_alerts(limit=20)
-        render_alert_feed(alerts, max_items=10)
+        st.markdown("""
+        <div style="background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-radius:8px 8px 0 0; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">Live Operational Alerts</div>
+                <div style="font-size:0.75rem; color:#94A3B8;">Sentinel anomaly detection & telemetry warnings</div>
+            </div>
+            <span style="background:rgba(239,68,68,0.15); color:#FCA5A5; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:700;">LIVE FEED</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        alerts = load_alerts(limit=30)
+        render_alert_feed_scrollable(alerts, height=480)
 
     st.divider()
 
-    # Bottom row: risk distribution + state comparison
+    # 3. Bottom row: Risk Distribution Donut + State-wise Risk Overview
     dist_col, state_col = st.columns(2)
 
     with dist_col:
-        st.markdown("### Risk Distribution")
+        st.markdown("""
+        <div style="background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-radius:8px 8px 0 0; padding:12px 16px;">
+            <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">Risk Distribution</div>
+            <div style="font-size:0.75rem; color:#94A3B8;">Severity classification breakdown for monitored facilities</div>
+        </div>
+        """, unsafe_allow_html=True)
+
         if summary:
             counts = {
-                "CRITICAL": summary.get("critical", 0),
-                "HIGH":     summary.get("high", 0),
-                "MEDIUM":   summary.get("medium", 0),
                 "LOW":      summary.get("low", 0),
+                "MEDIUM":   summary.get("medium", 0),
+                "HIGH":     summary.get("high", 0),
+                "CRITICAL": summary.get("critical", 0),
             }
-            fig_pie = go.Figure(go.Pie(
-                labels=list(counts.keys()),
-                values=list(counts.values()),
-                marker_colors=[SEVERITY_COLORS[k] for k in counts],
-                hole=0.6,
-                textinfo="label+value",
-                textfont=dict(color="#F9FAFB", size=13),
-                hovertemplate="%{label}: %{value} PHCs<extra></extra>",
-            ))
-            fig_pie.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("xaxis", "yaxis")},
-                showlegend=False,
-                height=280,
-                annotations=[dict(
-                    text=f"<b>{summary.get('total_phcs', 0)}</b><br>PHCs",
-                    x=0.5, y=0.5, font_size=18, showarrow=False,
-                    font_color="#F9FAFB",
-                )],
-            )
-            st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+            tot = summary.get("total_phcs", sum(counts.values()))
+            if tot == 0:
+                tot = 1
+
+            c_chart, c_stats = st.columns([1.1, 1.0])
+
+            with c_chart:
+                fig_pie = go.Figure(go.Pie(
+                    labels=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                    values=[counts["LOW"], counts["MEDIUM"], counts["HIGH"], counts["CRITICAL"]],
+                    marker=dict(
+                        colors=["#10B981", "#3B82F6", "#F59E0B", "#EF4444"],
+                        line=dict(color="#080D1A", width=2.5)
+                    ),
+                    hole=0.72,
+                    textinfo="none",
+                    direction="clockwise",
+                    sort=False,
+                    hovertemplate="<b>%{label} Severity</b><br>Facilities: <b>%{value}</b> (%{percent})<extra></extra>",
+                ))
+                fig_pie.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=5, b=5),
+                    showlegend=False,
+                    height=215,
+                    annotations=[dict(
+                        text=f"<b style='font-size:22px;color:#F8FAFC;'>{summary.get('total_phcs', 0)}</b><br><span style='font-size:10px;letter-spacing:0.8px;color:#64748B;font-weight:600;'>TOTAL PHCs</span>",
+                        x=0.5, y=0.5, showarrow=False, font_color="#F8FAFB",
+                    )],
+                )
+                st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+
+            with c_stats:
+                st.markdown(f"""
+                <div style="display:flex; flex-direction:column; justify-content:center; height:215px; padding-left:8px; gap:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#0E162B; padding:7px 12px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="width:9px; height:9px; border-radius:50%; background:#10B981; display:inline-block;"></span>
+                            <span style="font-size:0.8rem; font-weight:600; color:#E2E8F0;">LOW / NORMAL</span>
+                        </div>
+                        <div>
+                            <span style="font-size:0.88rem; font-weight:700; color:#F8FAFC;">{counts['LOW']}</span>
+                            <span style="font-size:0.72rem; color:#64748B; margin-left:4px;">({counts['LOW']*100/tot:.1f}%)</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#0E162B; padding:7px 12px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="width:9px; height:9px; border-radius:50%; background:#3B82F6; display:inline-block;"></span>
+                            <span style="font-size:0.8rem; font-weight:600; color:#E2E8F0;">MEDIUM / WATCH</span>
+                        </div>
+                        <div>
+                            <span style="font-size:0.88rem; font-weight:700; color:#F8FAFC;">{counts['MEDIUM']}</span>
+                            <span style="font-size:0.72rem; color:#64748B; margin-left:4px;">({counts['MEDIUM']*100/tot:.1f}%)</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#0E162B; padding:7px 12px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="width:9px; height:9px; border-radius:50%; background:#F59E0B; display:inline-block;"></span>
+                            <span style="font-size:0.8rem; font-weight:600; color:#E2E8F0;">HIGH RISK</span>
+                        </div>
+                        <div>
+                            <span style="font-size:0.88rem; font-weight:700; color:#F8FAFC;">{counts['HIGH']}</span>
+                            <span style="font-size:0.72rem; color:#64748B; margin-left:4px;">({counts['HIGH']*100/tot:.1f}%)</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#0E162B; padding:7px 12px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="width:9px; height:9px; border-radius:50%; background:#EF4444; display:inline-block;"></span>
+                            <span style="font-size:0.8rem; font-weight:600; color:#E2E8F0;">CRITICAL</span>
+                        </div>
+                        <div>
+                            <span style="font-size:0.88rem; font-weight:700; color:#F8FAFC;">{counts['CRITICAL']}</span>
+                            <span style="font-size:0.72rem; color:#64748B; margin-left:4px;">({counts['CRITICAL']*100/tot:.1f}%)</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
     with state_col:
-        st.markdown("### State-wise Risk Overview")
+        st.markdown("""
+        <div style="background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-radius:8px 8px 0 0; padding:12px 16px;">
+            <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">State-wise Risk Overview</div>
+            <div style="font-size:0.75rem; color:#94A3B8;">Facility distribution by state and risk level</div>
+        </div>
+        """, unsafe_allow_html=True)
+
         phcs_all = load_phcs()  # all states
         if phcs_all:
             df = pd.DataFrame(phcs_all)
@@ -1506,16 +1972,59 @@ def render_command_center():
                 .reset_index(name="count")
             )
             if not state_summary.empty:
-                fig_bar = px.bar(
-                    state_summary,
-                    x="state", y="count", color="risk_severity",
-                    color_discrete_map=SEVERITY_COLORS,
+                states = sorted(df["state"].unique())
+                fig_bar = go.Figure()
+
+                sev_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+                sev_colors = {
+                    "LOW": "#10B981",
+                    "MEDIUM": "#3B82F6",
+                    "HIGH": "#F59E0B",
+                    "CRITICAL": "#EF4444"
+                }
+
+                for sev in sev_order:
+                    subset = state_summary[state_summary["risk_severity"] == sev]
+                    cnt_map = dict(zip(subset["state"], subset["count"]))
+                    y_vals = [cnt_map.get(s, 0) for s in states]
+
+                    fig_bar.add_trace(go.Bar(
+                        name=sev,
+                        x=states,
+                        y=y_vals,
+                        marker_color=sev_colors[sev],
+                        hovertemplate="<b>%{x}</b><br>" + sev + ": <b>%{y} facilities</b><extra></extra>",
+                    ))
+
+                fig_bar.update_layout(
                     barmode="stack",
-                    labels={"state": "State", "count": "PHCs", "risk_severity": "Severity"},
+                    bargap=0.35,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    height=215,
+                    margin=dict(l=35, r=10, t=28, b=25),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1.0,
+                        font=dict(size=10, color="#94A3B8"),
+                        itemwidth=40
+                    ),
+                    xaxis=dict(
+                        tickfont=dict(size=11, color="#CBD5E1"),
+                        showgrid=False,
+                        linecolor="rgba(255,255,255,0.1)"
+                    ),
+                    yaxis=dict(
+                        tickfont=dict(size=10, color="#64748B"),
+                        gridcolor="rgba(255,255,255,0.05)",
+                        title=dict(text="PHCs", font=dict(size=10, color="#64748B"))
+                    )
                 )
-                fig_bar.update_layout(**PLOTLY_LAYOUT, height=280, showlegend=True)
-                fig_bar.update_traces(marker_line_width=0)
                 st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+
 
 
 # ══════════════════════════════════════════════════════════════════════════
