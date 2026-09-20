@@ -162,7 +162,12 @@ class ResilientInMemoryStore:
                 dist_name = ddata["name"]
                 c_lat, c_lon = ddata["center"]
                 for loc in ddata["localities"]:
-                    phc_id = f"{state_code}-{dist_code}-{phc_counter:03d}"
+                    if dist_code == "PUN" and loc == "Hadapsar":
+                        phc_id = "MH-PUN-042"
+                    elif dist_code == "PUN" and loc == "Pimpri":
+                        phc_id = "MH-PUN-018"
+                    else:
+                        phc_id = f"{state_code}-{dist_code}-{phc_counter:03d}"
                     if phc_id in DEMO_PHCS:
                         pdata = DEMO_PHCS[phc_id]
                         name = pdata["name"]
@@ -384,6 +389,83 @@ class ResilientInMemoryStore:
                     })
         self.tables["resilia-alerts"] = alerts
 
+        # 4b. Patients (30-day daily records per PHC)
+        patients = []
+        today = date.today()
+        for p in phc_list:
+            is_hadapsar = (p["phc_id"] == "MH-PUN-042")
+            base_opd = 85 if is_hadapsar else rng.randint(40, 75)
+            for d in range(29, -1, -1):
+                cur_date = (today - timedelta(days=d)).isoformat()
+                # Post-monsoon surge effect for Hadapsar
+                if is_hadapsar and d < 14:
+                    surge_mult = 1.0 + (0.42 * (14 - d) / 14.0) + rng.uniform(-0.04, 0.06)
+                else:
+                    surge_mult = 1.0 + rng.uniform(-0.12, 0.12)
+                opd = max(15, int(base_opd * surge_mult))
+                ipd = max(2, min(p["beds_total"], int(p["beds_occupied"] * rng.uniform(0.85, 1.1))))
+                new_adm = max(0, int(ipd * rng.uniform(0.12, 0.25)))
+                disch = max(0, int(ipd * rng.uniform(0.10, 0.22)))
+
+                if is_hadapsar:
+                    dengue_c = int(opd * rng.uniform(0.28, 0.42))
+                    diarrhea_c = int(opd * rng.uniform(0.18, 0.26))
+                    fever_c = int(opd * rng.uniform(0.15, 0.22))
+                else:
+                    dengue_c = int(opd * rng.uniform(0.02, 0.07))
+                    diarrhea_c = int(opd * rng.uniform(0.08, 0.16))
+                    fever_c = int(opd * rng.uniform(0.10, 0.18))
+                resp_c = max(1, opd - (dengue_c + diarrhea_c + fever_c))
+
+                patients.append({
+                    "phc_id": p["phc_id"],
+                    "date": cur_date,
+                    "total_opd": opd,
+                    "total_ipd": ipd,
+                    "new_admissions": new_adm,
+                    "discharges": disch,
+                    "referrals_out": max(0, int(ipd * 0.05)),
+                    "deaths": 0 if rng.random() > 0.05 else 1,
+                    "disease_breakdown": {
+                        "dengue": dengue_c,
+                        "diarrhea": diarrhea_c,
+                        "fever": fever_c,
+                        "respiratory": resp_c,
+                    },
+                    "trend": "rising" if (is_hadapsar and d < 14) else "stable",
+                })
+        self.tables["resilia-patients"] = patients
+
+        # 4c. Staff (30-day daily attendance per PHC)
+        staff_records = []
+        for p in phc_list:
+            doc_t = p["doctors_total"]
+            doc_p = p["doctors_present"]
+            nur_t = p["nurses_total"]
+            nur_p = p["nurses_present"]
+            asha_t = p["asha_workers"]
+            pharm_t = p["pharmacists"]
+            for d in range(29, -1, -1):
+                cur_date = (today - timedelta(days=d)).isoformat()
+                dp = max(1, doc_p if d == 0 else int(doc_t * rng.uniform(0.5, 1.0)))
+                np = max(1, nur_p if d == 0 else int(nur_t * rng.uniform(0.6, 1.0)))
+                ap = max(1, int(asha_t * rng.uniform(0.7, 0.95)))
+                pp = max(0, pharm_t if rng.random() > 0.1 else 0)
+                staff_records.append({
+                    "phc_id": p["phc_id"],
+                    "date": cur_date,
+                    "doctors_total": doc_t,
+                    "doctors_present": dp,
+                    "nurses_total": nur_t,
+                    "nurses_present": np,
+                    "asha_total": asha_t,
+                    "asha_active": ap,
+                    "pharmacists_total": pharm_t,
+                    "pharmacists_present": pp,
+                    "on_leave": [f"DOC-{p['phc_id']}-01"] if (doc_t - dp) > 0 else [],
+                })
+        self.tables["resilia-staff"] = staff_records
+
         # 5. Shipments
         shipments = []
         for p in phc_list[:15]:
@@ -420,11 +502,13 @@ class ResilientInMemoryStore:
         ]
 
         self._initialized = True
-        logger.info(f"Resilient Store populated: {len(phc_list)} PHCs, {len(all_inventory)} inventory lines, {len(alerts)} alerts.")
+        logger.info(f"Resilient Store populated: {len(phc_list)} PHCs, {len(all_inventory)} inventory lines, {len(patients)} patient days, {len(alerts)} alerts.")
 
     def get_table_items(self, table_name: str, filter_expr=None) -> List[dict]:
         self._ensure_initialized()
         items = self.tables.get(table_name, [])
+        if filter_expr is not None:
+            return [dict(i) for i in items if matches_condition(i, filter_expr)]
         return [dict(i) for i in items]
 
     def get_item(self, table_name: str, key: dict) -> Optional[dict]:
@@ -440,18 +524,13 @@ class ResilientInMemoryStore:
                 return dict(item)
         return None
 
-    def query_table(self, table_name: str, index_name: str, key_condition, filter_expr=None) -> List[dict]:
+    def query_table(self, table_name: str, index_name: str = None, key_condition=None, filter_expr=None) -> List[dict]:
         self._ensure_initialized()
         items = self.tables.get(table_name, [])
-        try:
-            expr = key_condition.get_expression()
-            val = expr.get("values", [None, None])[1]
-            attr = getattr(expr.get("values", [None])[0], "name", None)
-            if attr and val is not None:
-                matched = [dict(i) for i in items if str(i.get(attr)) == str(val)]
-                return matched
-        except Exception:
-            pass
+        if key_condition is not None:
+            items = [i for i in items if matches_condition(i, key_condition)]
+        if filter_expr is not None:
+            items = [i for i in items if matches_condition(i, filter_expr)]
         return [dict(i) for i in items]
 
     def put_item(self, table_name: str, item: dict) -> None:
@@ -465,6 +544,42 @@ class ResilientInMemoryStore:
                 items[idx] = dict(item)
                 return
         items.append(dict(item))
+
+
+def matches_condition(item: dict, cond) -> bool:
+    """Evaluate DynamoDB condition against an in-memory dictionary item."""
+    if cond is None:
+        return True
+    try:
+        expr = cond.get_expression()
+        op = expr.get("operator")
+        if op == "AND":
+            return all(matches_condition(item, v) for v in expr.get("values", []))
+        elif op == "OR":
+            return any(matches_condition(item, v) for v in expr.get("values", []))
+        elif op == "=":
+            vals = expr.get("values", [])
+            attr_name = getattr(vals[0], "name", None)
+            return str(item.get(attr_name)) == str(vals[1])
+        elif op == ">=":
+            vals = expr.get("values", [])
+            attr_name = getattr(vals[0], "name", None)
+            return str(item.get(attr_name)) >= str(vals[1])
+        elif op == "<=":
+            vals = expr.get("values", [])
+            attr_name = getattr(vals[0], "name", None)
+            return str(item.get(attr_name)) <= str(vals[1])
+        elif op == ">":
+            vals = expr.get("values", [])
+            attr_name = getattr(vals[0], "name", None)
+            return str(item.get(attr_name)) > str(vals[1])
+        elif op == "<":
+            vals = expr.get("values", [])
+            attr_name = getattr(vals[0], "name", None)
+            return str(item.get(attr_name)) < str(vals[1])
+    except Exception:
+        pass
+    return True
 
 
 # Singleton instance

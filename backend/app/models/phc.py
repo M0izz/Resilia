@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 from app.models.common import RiskSeverity, ZoneType
@@ -12,6 +12,20 @@ class PHC(BaseModel):
     district: str
     district_code: str
     zone: ZoneType
+
+    @field_validator("zone", mode="before")
+    @classmethod
+    def normalize_zone(cls, v):
+        if isinstance(v, str):
+            mapping = {
+                "URBAN": "Urban",
+                "SEMI_URBAN": "Semi-urban",
+                "SEMI-URBAN": "Semi-urban",
+                "RURAL": "Rural",
+                "TRIBAL": "Tribal",
+            }
+            return mapping.get(v.upper(), v)
+        return v
     lat: float
     lng: float
     address: str

@@ -25,6 +25,7 @@ router = APIRouter(prefix="/crisis", tags=["Crisis Digital Twin & Federated Inte
 
 
 @router.get("/presets", response_model=List[Dict[str, Any]])
+@router.get("/scenarios", response_model=List[Dict[str, Any]])
 async def get_preset_scenarios():
     """Retrieve catalog of pre-configured high-impact crisis demo scenarios."""
     return crisis_agent.get_presets()

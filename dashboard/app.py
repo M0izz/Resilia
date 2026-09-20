@@ -8,11 +8,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import requests
+import sys
+import socket
+import time
 from datetime import datetime
 
 # ─── Config ───────────────────────────────────────────────────────────────
 
-API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
+API_BASE = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(
     page_title="RESILIA — National Healthcare Resilience Platform",
@@ -663,6 +670,16 @@ SEVERITY_COLORS = {
     "LOW":      "#10B981",
 }
 
+def _hex_to_rgba(hex_code: str, alpha: float = 0.15) -> str:
+    h = str(hex_code).lstrip("#")
+    if len(h) >= 6:
+        try:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"rgba({r},{g},{b},{alpha})"
+        except Exception:
+            pass
+    return f"rgba(239,68,68,{alpha})"
+
 ACTION_COLORS = {
     "ALERT_ESCALATED": "#EF4444",
     "MONITORING":      "#F59E0B",
@@ -682,41 +699,100 @@ EVENT_TYPE_ICONS = {
 
 # ─── API helpers ──────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300, show_spinner=False)
-def api_get(path: str, params: dict = None) -> dict | list | None:
+_session = requests.Session()
+_in_process_client = None
+_server_checked_at = 0.0
+_server_is_online = False
+
+def _check_server_online() -> bool:
+    global _server_checked_at, _server_is_online
+    now = time.time()
+    if now - _server_checked_at < 5.0:
+        return _server_is_online
+    _server_checked_at = now
     try:
-        resp = requests.get(f"{API_BASE}{path}", params=params or {}, timeout=8)
-        resp.raise_for_status()
-        return resp.json()
+        from urllib.parse import urlparse
+        parsed = urlparse(API_BASE)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 8000
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.02)
+        res = sock.connect_ex((host, port))
+        sock.close()
+        _server_is_online = (res == 0)
     except Exception:
-        return None
+        _server_is_online = False
+    return _server_is_online
+
+def _get_in_process_client():
+    global _in_process_client
+    if _in_process_client is None:
+        try:
+            from app.main import app as fastapi_app
+            from fastapi.testclient import TestClient
+            _in_process_client = TestClient(fastapi_app)
+        except Exception:
+            _in_process_client = False
+    return _in_process_client if _in_process_client is not False else None
+
+
+def _dispatch_get(path: str, params: dict = None, timeout: float = 0.6):
+    """Fast GET: tries local HTTP server if online, seamlessly falls back to in-process ASGI TestClient."""
+    if _check_server_online():
+        try:
+            resp = _session.get(f"{API_BASE}{path}", params=params or {}, timeout=timeout)
+            if resp.status_code < 400:
+                return resp.json()
+        except Exception:
+            pass
+    client = _get_in_process_client()
+    if client:
+        try:
+            resp = client.get(path, params=params or {})
+            if resp.status_code < 400:
+                return resp.json()
+        except Exception:
+            pass
+    return None
+
+
+def _dispatch_post(path: str, data: dict = None, params: dict = None, timeout: float = 3.0):
+    """Fast POST: tries local HTTP server if online, seamlessly falls back to in-process ASGI TestClient."""
+    if _check_server_online():
+        try:
+            resp = _session.post(f"{API_BASE}{path}", json=data or {}, params=params or {}, timeout=timeout)
+            if resp.status_code < 400:
+                return resp.json()
+        except Exception:
+            pass
+    client = _get_in_process_client()
+    if client:
+        try:
+            resp = client.post(path, json=data or {}, params=params or {})
+            if resp.status_code < 400:
+                return resp.json()
+        except Exception:
+            pass
+    return None
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def api_get(path: str, params: dict = None) -> dict | list | None:
+    return _dispatch_get(path, params, timeout=0.6)
 
 
 def api_post(path: str, data: dict = None, params: dict = None):
-    try:
-        resp = requests.post(f"{API_BASE}{path}", json=data or {}, params=params or {}, timeout=8)
-        return resp.json()
-    except Exception:
-        return None
+    return _dispatch_post(path, data, params, timeout=3.0)
 
 
 def api_post_nocache(path: str, data: dict = None) -> dict | None:
     """POST without cache, used for sentinel scan triggers and event emissions."""
-    try:
-        resp = requests.post(f"{API_BASE}{path}", json=data or {}, timeout=15)
-        return resp.json()
-    except Exception:
-        return None
+    return _dispatch_post(path, data, timeout=10.0)
 
 
 def api_get_nocache(path: str, params: dict = None) -> dict | list | None:
     """GET without cache, used for live polling (sentinel decisions, event stream)."""
-    try:
-        resp = requests.get(f"{API_BASE}{path}", params=params or {}, timeout=8)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return None
+    return _dispatch_get(path, params, timeout=1.0)
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────
@@ -755,21 +831,28 @@ with st.sidebar:
     nav_btn("Home", "Home", icon=":material/home:")
 
     st.markdown('<div class="sidebar-heading">OPERATIONS</div>', unsafe_allow_html=True)
+    nav_btn("Command Center", "National Command Center", icon=":material/dashboard:")
     nav_btn("PHC Network", "PHC Network", icon=":material/hub:")
 
-    # Alerts & Risks with red circular count badge '3'
+    # Live badge counts
+    _live_alerts = api_get("/alerts", {"limit": 100}) or []
+    _unack_alerts = sum(1 for a in _live_alerts if not a.get("acknowledged", False))
+    _live_intvs = api_get("/interventions") or []
+    _active_intvs = sum(1 for i in _live_intvs if i.get("status") in ("AWAITING_APPROVAL", "PENDING", "DISPATCHED"))
+
+    # Alerts & Risks with live unacknowledged alert badge
     col_a1, col_a2 = st.columns([0.82, 0.18])
     with col_a1:
         nav_btn("Alerts & Risks", "Alerts & Risks", icon=":material/warning:")
     with col_a2:
-        st.markdown('<div class="sidebar-badge-wrap"><span class="sidebar-red-badge">3</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sidebar-badge-wrap"><span class="sidebar-red-badge">{_unack_alerts}</span></div>', unsafe_allow_html=True)
 
-    # Interventions with red circular count badge '2'
+    # Interventions with live intervention count badge
     col_i1, col_i2 = st.columns([0.82, 0.18])
     with col_i1:
         nav_btn("Interventions", "Interventions", icon=":material/shield:")
     with col_i2:
-        st.markdown('<div class="sidebar-badge-wrap"><span class="sidebar-red-badge">2</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sidebar-badge-wrap"><span class="sidebar-red-badge">{_active_intvs}</span></div>', unsafe_allow_html=True)
 
     nav_btn("Crisis Simulator", "Crisis Simulator", icon=":material/view_in_ar:")
     nav_btn("Forecasts", "Forecasts", icon=":material/trending_up:")
@@ -827,7 +910,7 @@ with st.sidebar:
 
 # ─── Data loading ─────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_network_summary(state_code=None):
     params = {}
     if state_code:
@@ -835,14 +918,24 @@ def load_network_summary(state_code=None):
     res = api_get("/phcs/network-summary", params)
     if res:
         return res
+    phcs = load_phcs(state_code)
+    alerts = load_alerts()
+    tot = len(phcs)
+    crit = sum(1 for p in phcs if p.get("risk_severity") == "CRITICAL")
+    high = sum(1 for p in phcs if p.get("risk_severity") == "HIGH")
+    med = sum(1 for p in phcs if p.get("risk_severity") == "MEDIUM")
+    low = sum(1 for p in phcs if p.get("risk_severity") == "LOW")
     return {
-        "total_phcs": 82, "critical": 0, "high": 25, "medium": 14, "low": 43,
-        "active_alerts": 96, "medicine_shortages": 30, "avg_bed_utilization": 55.6,
-        "avg_doctor_attendance": 54.4, "total_patients_today": 1240, "pending_interventions": 1
+        "total_phcs": tot, "critical": crit, "high": high, "medium": med, "low": low,
+        "active_alerts": len(alerts), "medicine_shortages": crit + high,
+        "avg_bed_utilization": round(sum(p.get("beds_occupied",0)/max(p.get("beds_total",1),1)*100 for p in phcs)/max(tot,1), 1) if phcs else 0.0,
+        "avg_doctor_attendance": round(sum(p.get("doctors_present",0)/max(p.get("doctors_total",1),1)*100 for p in phcs)/max(tot,1), 1) if phcs else 0.0,
+        "total_patients_today": sum(p.get("catchment_population",0)//50 for p in phcs),
+        "pending_interventions": 1
     }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_phcs(state_code=None, district_code=None):
     params = {}
     if state_code:    params["state_code"] = state_code
@@ -851,7 +944,7 @@ def load_phcs(state_code=None, district_code=None):
     return res or []
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_alerts(severity=None, limit=50):
     params = {"limit": limit}
     if severity:
@@ -863,12 +956,12 @@ def load_alerts(severity=None, limit=50):
 # ─── Shared component: KPI strip ─────────────────────────────────────────
 
 def render_kpi_strip(summary: dict):
-    tot_phcs = summary.get("total_phcs") or 82
-    high_fac = summary.get("high") or 25
-    act_intv = summary.get("active_interventions") or 12
-    pred_stock = summary.get("predicted_stockouts") or 19
-    bed_util = summary.get("avg_bed_utilization") or 55.6
-    alerts = summary.get("active_alerts") or 96
+    tot_phcs = summary.get("total_phcs", 0)
+    high_fac = summary.get("high", 0)
+    act_intv = summary.get("pending_interventions", 0)
+    pred_stock = summary.get("medicine_shortages", 0)
+    bed_util = summary.get("avg_bed_utilization", 0.0)
+    alerts = summary.get("active_alerts", 0)
 
     st.markdown(f"""
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-bottom:20px;">
@@ -1931,7 +2024,7 @@ def render_predictive_intelligence():
                         x=dates_c, y=stocks_c,
                         mode="lines+markers",
                         fill="tozeroy",
-                        fillcolor=f"{risk_color}18",
+                        fillcolor=_hex_to_rgba(risk_color, 0.12),
                         line=dict(color=risk_color, width=2.5),
                         marker=dict(size=4),
                         name="Projected Stock",
@@ -2080,98 +2173,21 @@ def render_response_center():
     # Fetch live plans from API
     plans_data = api_get_nocache("/optimization/plans")
     if not plans_data or not isinstance(plans_data, list):
-        # Fallback local demo plan if backend is restarting or offline
-        plans_data = [{
-            "plan_id": "INTV-DEMO-PUN-042",
-            "created_at": datetime.utcnow().isoformat(),
-            "status": "AWAITING_APPROVAL",
+        # Trigger real on-demand optimization plan generation via Google OR-Tools SCIP solver
+        new_plan = api_post_nocache("/optimization/plan", {
             "target_phc_id": "MH-PUN-042",
-            "target_phc_name": "PHC Hadapsar",
-            "target_district": "Pune",
             "medicine_code": "ORS-001",
-            "medicine_name": "Oral Rehydration Salts",
-            "title": "Intervention Plan: Rebalance ORS-001 to PHC Hadapsar",
-            "problem_summary": "ORS-001 stock-out predicted at PHC Hadapsar (MH-PUN-042) in 4.2 days. Current inventory is 450 units against a burn rate of 70.3 units/day.",
-            "recommended_action": "Transfer 1,000 units of Oral Rehydration Salts from PHC Pimpri Hub (MH-PUN-018, Pune District) to PHC Hadapsar.",
-            "expected_impact": "Stock-out avoided. Runway extended from 4.2 days to 18.5 days (+14.3 days safety buffer). Composite facility risk reduced by 82.5%.",
-            "impact_metrics": {
-                "pre_stock_days": 4.2,
-                "post_stock_days": 18.5,
-                "stock_out_avoided": True,
-                "days_gained": 14.3,
-                "risk_reduction_pct": 82.5,
-            },
-            "transport_summary": "Vehicle V-17 assigned. Transit distance: 28.5 km via primary Pune logistics corridor (Intra-District Transfer). Estimated transit time: 4.8 hours.",
-            "primary_source_phc_id": "MH-PUN-018",
-            "primary_source_phc_name": "PHC Pimpri Hub",
-            "primary_source_district": "Pune",
-            "is_cross_district": False,
-            "total_units": 1000.0,
-            "eta_hours": 4.8,
-            "assigned_vehicle_id": "V-17",
-            "confidence": {
-                "rating": "HIGH",
-                "score_pct": 94.2,
-                "factor_breakdown": {
-                    "Deficit Coverage": "Full requirement fulfilled (100.0%)",
-                    "Source Buffer": "Robust remaining buffer at source (18.7 days > 7.0d safety stock)",
-                    "Logistics Corridor": "Short-haul transfer (28.5 km); minimal traffic variance",
-                },
-            },
-            "routes": [{
-                "route_id": "ROUTE-PUN-01",
-                "source_phc_id": "MH-PUN-018",
-                "source_name": "PHC Pimpri Hub",
-                "source_district": "Pune",
-                "destination_phc_id": "MH-PUN-042",
-                "destination_name": "PHC Hadapsar",
-                "destination_district": "Pune",
-                "is_cross_district": False,
-                "medicine_code": "ORS-001",
-                "medicine_name": "Oral Rehydration Salts",
-                "quantity": 1000.0,
-                "distance_km": 28.5,
-                "eta_hours": 4.8,
-                "vehicle_id": "V-17",
-                "transport_cost_inr": 1500.0,
-                "remaining_source_stock_days": 18.7,
-            }],
-            "optimization_result": {
-                "status": "OPTIMAL",
-                "solver_name": "Google OR-Tools SCIP (Mixed-Integer Linear Programming)",
-                "objective_value": 850.0,
-                "runtime_ms": 14.2,
-                "target_phc_id": "MH-PUN-042",
-                "medicine_code": "ORS-001",
-                "medicine_name": "Oral Rehydration Salts",
-                "deficit_units": 1000.0,
-                "total_allocated_units": 1000.0,
-                "unmet_deficit_units": 0.0,
-                "candidates_evaluated": 4,
-                "constraints_satisfied": [
-                    "Safety Stock Invariant: All sources preserve >= 7.0 days reserve post-transfer.",
-                    "Deficit Coverage: 1,000 of 1,000 units fulfilled (100.0%).",
-                    "Vehicle Capacity: Transfers capped at 3,000 units per dispatch.",
-                    "Transit Optimization: Minimal geodetic distance & ETA selected.",
-                ],
-                "surplus_candidates": [
-                    {"phc_id": "MH-PUN-018", "phc_name": "PHC Pimpri Hub", "district": "Pune", "distance_km": 28.5, "eta_hours": 4.8, "current_stock": 1850, "daily_consumption": 68, "surplus_days": 18.7, "available_surplus_units": 1374, "is_cross_district": False},
-                    {"phc_id": "MH-SAT-027", "phc_name": "PHC Shirwal Central", "district": "Satara", "distance_km": 54.2, "eta_hours": 5.2, "current_stock": 2400, "daily_consumption": 55, "surplus_days": 24.5, "available_surplus_units": 2015, "is_cross_district": True},
-                    {"phc_id": "MH-SOL-061", "phc_name": "PHC Baramati East", "district": "Solapur", "distance_km": 82.0, "eta_hours": 6.1, "current_stock": 1400, "daily_consumption": 60, "surplus_days": 16.3, "available_surplus_units": 980, "is_cross_district": True},
-                ],
-                "allocated_routes": [{
-                    "source_phc_id": "MH-PUN-018",
-                    "source_name": "PHC Pimpri Hub",
-                    "source_district": "Pune",
-                    "quantity": 1000.0,
-                    "distance_km": 28.5,
-                    "eta_hours": 4.8,
-                    "vehicle_id": "V-17",
-                    "transport_cost_inr": 1500.0,
-                    "remaining_source_stock_days": 18.7,
-                }]
-            }
-        }]
+            "deficit_units": 1000.0,
+            "vehicle_capacity": 3000.0,
+        })
+        if new_plan and isinstance(new_plan, dict) and "plan_id" in new_plan:
+            plans_data = [new_plan]
+        else:
+            plans_data = []
+
+    if not plans_data:
+        st.info("No active intervention plans found. Trigger a redistribution plan or run the autonomous agentic loop.")
+        return
 
     # Top KPI strip
     pending_count = sum(1 for p in plans_data if p.get("status") in ("AWAITING_APPROVAL", "PROPOSED", "MODIFIED"))
@@ -3530,26 +3546,38 @@ def render_executive_landing_view():
     st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
     # ── Live Telemetry Strip ──
-    st.markdown("""
+    summary = load_network_summary() or {}
+    bench = api_get("/evaluation/benchmarks") or {}
+    f_metrics = bench.get("forecasting", {})
+    o_metrics = bench.get("optimization", {})
+    s_metrics = bench.get("simulation", {})
+
+    total_phcs = summary.get("total_phcs", len(load_phcs()) or 82)
+    warning_days = f_metrics.get("lead_time_warning_days", 4.2)
+    pred_acc = f_metrics.get("stockout_prediction_accuracy_pct", 94.6)
+    solver_ms = o_metrics.get("mean_solver_runtime_ms", 14.8)
+    resilience_gain = s_metrics.get("network_resilience_gain_pct", 27.7)
+
+    st.markdown(f"""
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px; margin-bottom:34px;">
         <div class="bento-metric-card">
             <div class="bento-label">FACILITIES MONITORED</div>
-            <div class="bento-value">82 PHCs</div>
+            <div class="bento-value">{total_phcs} PHCs</div>
             <div class="bento-delta bento-delta-blue">5 Indian States Connected</div>
         </div>
         <div class="bento-metric-card">
             <div class="bento-label">ADVANCE WARNING HORIZON</div>
-            <div class="bento-value" style="color:#34D399;">4.2 Days</div>
-            <div class="bento-delta bento-delta-green">94.6% Prediction Accuracy</div>
+            <div class="bento-value" style="color:#34D399;">{warning_days:.1f} Days</div>
+            <div class="bento-delta bento-delta-green">{pred_acc:.1f}% Prediction Accuracy</div>
         </div>
         <div class="bento-metric-card">
             <div class="bento-label">OPTIMIZATION SOLVER</div>
-            <div class="bento-value">14.8 ms</div>
+            <div class="bento-value">{solver_ms:.1f} ms</div>
             <div class="bento-delta bento-delta-blue">Google OR-Tools SCIP MILP</div>
         </div>
         <div class="bento-metric-card">
             <div class="bento-label">SYSTEMIC RESILIENCE GAIN</div>
-            <div class="bento-value" style="color:#38BDF8;">+27.7%</div>
+            <div class="bento-value" style="color:#38BDF8;">+{resilience_gain:.1f}%</div>
             <div class="bento-delta bento-delta-green">58.5% -> 86.2% Dual-Shock Boost</div>
         </div>
         <div class="bento-metric-card">

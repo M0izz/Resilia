@@ -77,6 +77,10 @@ async def network_summary(state_code: Optional[str] = Query(None)):
     stockout_alerts = scan_all("resilia-alerts", Attr("alert_type").eq("STOCKOUT_RISK"))
     shortage_phcs = len({a["phc_id"] for a in stockout_alerts})
 
+    # Count real active/pending interventions
+    all_interventions = scan_all("resilia-interventions")
+    pending_count = sum(1 for i in all_interventions if i.get("status") in ("AWAITING_APPROVAL", "PENDING", "DISPATCHED"))
+
     return NetworkSummary(
         total_phcs=len(items),
         critical=counts["CRITICAL"],
@@ -88,7 +92,7 @@ async def network_summary(state_code: Optional[str] = Query(None)):
         avg_bed_utilization=round(sum(bed_rates) / len(bed_rates) * 100, 1) if bed_rates else 0.0,
         avg_doctor_attendance=round(sum(doc_rates) / len(doc_rates) * 100, 1) if doc_rates else 0.0,
         total_patients_today=total_patients,
-        pending_interventions=0,   # filled by interventions router in future
+        pending_interventions=pending_count,
     )
 
 
@@ -123,6 +127,14 @@ async def get_phc(phc_id: str):
     item = resp.get("Item")
     if not item:
         raise HTTPException(status_code=404, detail=f"PHC {phc_id} not found")
+
+    if "zone" in item and isinstance(item["zone"], str):
+        zmap = {"URBAN": "Urban", "SEMI_URBAN": "Semi-urban", "SEMI-URBAN": "Semi-urban", "RURAL": "Rural", "TRIBAL": "Tribal"}
+        item["zone"] = zmap.get(item["zone"].upper(), item["zone"])
+    if "district_hospital_id" not in item:
+        item["district_hospital_id"] = item.get("nearest_district_hospital", "DH-PUN-001")
+    if "supplier_ids" not in item:
+        item["supplier_ids"] = [item.get("primary_supplier_id", "SUP-MH-001")]
 
     # Enrich computed fields
     item["bed_utilization_pct"] = risk_engine.bed_utilization_pct(

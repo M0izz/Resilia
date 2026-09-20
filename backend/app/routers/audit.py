@@ -17,6 +17,7 @@ router = APIRouter(prefix="/audit", tags=["Security & AI Decision Auditability"]
 
 
 @router.get("/records", response_model=AuditTrailQueryResponse)
+@router.get("/ledger", response_model=AuditTrailQueryResponse)
 async def get_audit_trail(
     limit: int = Query(50, ge=1, le=200),
     facility_id: Optional[str] = Query(None, description="Filter by facility ID")

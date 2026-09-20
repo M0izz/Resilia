@@ -43,6 +43,24 @@ def is_dynamodb_online() -> bool:
     global _dynamodb_online
     if _dynamodb_online is not None:
         return _dynamodb_online
+
+    # Fast non-blocking socket check for local DynamoDB endpoint
+    endpoint = settings.dynamodb_endpoint
+    if endpoint and ("localhost" in endpoint or "127.0.0.1" in endpoint):
+        try:
+            import socket
+            from urllib.parse import urlparse
+            parsed = urlparse(endpoint)
+            port = parsed.port or 8000
+            host = parsed.hostname or "127.0.0.1"
+            if host == "localhost":
+                host = "127.0.0.1"
+            s = socket.create_connection((host, port), timeout=0.05)
+            s.close()
+        except Exception:
+            _dynamodb_online = False
+            return False
+
     try:
         client = get_client()
         client.list_tables()
@@ -99,7 +117,8 @@ class ResilientTableWrapper:
                     return resp
             except Exception:
                 pass
-        items = in_memory_store.get_table_items(self.table_name)
+        filter_expr = kwargs.get("FilterExpression")
+        items = in_memory_store.get_table_items(self.table_name, filter_expr=filter_expr)
         return {"Items": items, "Count": len(items)}
 
     def query(self, **kwargs) -> dict:
@@ -110,7 +129,10 @@ class ResilientTableWrapper:
                     return resp
             except Exception:
                 pass
-        items = in_memory_store.get_table_items(self.table_name)
+        key_condition = kwargs.get("KeyConditionExpression")
+        filter_expr = kwargs.get("FilterExpression")
+        index_name = kwargs.get("IndexName")
+        items = in_memory_store.query_table(self.table_name, index_name=index_name, key_condition=key_condition, filter_expr=filter_expr)
         return {"Items": items, "Count": len(items)}
 
 
