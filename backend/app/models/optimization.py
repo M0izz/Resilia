@@ -151,7 +151,7 @@ class OperationalInterventionPlan(BaseModel):
 
 class PlanApprovalRequest(BaseModel):
     """Human approval submission."""
-    approved_by: str = "Dr. Priya Sharma (District Health Officer)"
+    approved_by: str
     note: Optional[str] = "Approved: Surplus validated, logistics corridor cleared."
 
 

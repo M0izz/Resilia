@@ -41,12 +41,11 @@ def test_audit_ledger_integrity():
 
 
 def test_agentic_loop_orchestration():
-    """Verify the complete 10-phase autonomous agentic loop executes sequentially."""
+    """Verify the complete 10-phase autonomous agentic loop executes sequentially when authorized."""
     trace = agentic_orchestrator.execute_loop(
         facility_id="MH-PUN-042",
-        facility_name="PHC Hadapsar",
-        district="Pune",
-        auto_approve=True,
+        medicine_code="ORS-001",
+        approved_by="Dr. Verified DHO (Pune)",
     )
     assert trace.total_steps == 10
     assert trace.status == "COMPLETED"
@@ -60,10 +59,22 @@ def test_agentic_loop_orchestration():
     assert "Crisis Twin Cascading Simulation" in step_names[3]
     assert "Resource Optimization Engine" in step_names[4]
     assert "Response Plan Synthesis" in step_names[5]
-    assert "Human Health Officer Approval" in step_names[6]
-    assert "Workflow Execution Pipeline" in step_names[7]
+    assert "Human Health Officer Governance" in step_names[6]
     assert "Explainable AI Audit Trail" in step_names[8]
     assert "Federated Model Continuous Refinement" in step_names[9]
+
+
+def test_agentic_loop_halts_at_approval_gate():
+    """Verify that execution halts at Step 7 in AWAITING_APPROVAL if not authorized."""
+    trace = agentic_orchestrator.execute_loop(
+        facility_id="MH-PUN-042",
+        medicine_code="ORS-001",
+        approved_by=None,
+    )
+    assert trace.total_steps == 7
+    assert trace.status == "AWAITING_APPROVAL"
+    assert trace.steps[-1].status == "AWAITING_APPROVAL"
+    assert "awaiting digital authorization" in trace.steps[-1].summary.lower()
 
 
 def test_evaluation_benchmarks():
@@ -104,15 +115,25 @@ async def test_sprint5_api_endpoints():
         assert ver_res.status_code == 200
         assert ver_res.json()["is_valid"] is True
 
-        # 4. Agentic Loop Execution
+        # 4. Agentic Loop Execution (without approval -> AWAITING_APPROVAL)
         loop_res = await client.post("/agentic-loop/run", json={"facility_id": "MH-PUN-042"})
         assert loop_res.status_code == 200
-        assert loop_res.json()["total_steps"] == 10
+        assert loop_res.json()["status"] == "AWAITING_APPROVAL"
+        assert loop_res.json()["total_steps"] == 7
+
+        # 4b. Agentic Loop Execution (with human approval -> COMPLETED)
+        loop_approved = await client.post(
+            "/agentic-loop/run",
+            json={"facility_id": "MH-PUN-042", "approved_by": "Dr. Verified DHO (Pune)"},
+        )
+        assert loop_approved.status_code == 200
+        assert loop_approved.json()["total_steps"] == 10
+        assert loop_approved.json()["status"] == "COMPLETED"
 
         # 5. Agentic Loop Status
         status_res = await client.get("/agentic-loop/status")
         assert status_res.status_code == 200
-        assert status_res.json()["status"] == "COMPLETED"
+        assert status_res.json()["status"] in ("COMPLETED", "AWAITING_APPROVAL")
 
         # 6. Evaluation Benchmarks
         bench_res = await client.get("/evaluation/benchmarks")

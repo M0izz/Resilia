@@ -44,7 +44,7 @@ class WorkflowExecutor:
     AWS Step Functions State Machine Simulator for autonomous healthcare interventions.
     """
 
-    STATE_MACHINE_ARN = "arn:aws:states:us-east-1:123456789012:stateMachine:ResiliaInterventionPipeline"
+    STATE_MACHINE_ARN: Optional[str] = getattr(settings, "step_functions_arn", None)
 
     @classmethod
     def execute_approval(
@@ -59,9 +59,16 @@ class WorkflowExecutor:
         now = datetime.utcnow()
         now_iso = now.isoformat()
         execution_id = f"exec-{uuid.uuid4().hex[:12]}"
-        execution_arn = f"{cls.STATE_MACHINE_ARN}:{execution_id}"
-        db_live = _is_db_reachable()
+        
+        # Real AWS Step Functions or transparent local simulated workflow
+        if cls.STATE_MACHINE_ARN:
+            execution_arn = f"{cls.STATE_MACHINE_ARN}:{execution_id}"
+            execution_type = "AWS_STEP_FUNCTIONS"
+        else:
+            execution_arn = None
+            execution_type = "LOCAL_SIMULATED"
 
+        db_live = _is_db_reachable()
         steps = []
 
         # ── Step 1: Initialize Step Functions Execution ──────────────────────
@@ -69,7 +76,13 @@ class WorkflowExecutor:
             "step_name": "ExecutionStarted",
             "status": "COMPLETED",
             "timestamp": now_iso,
-            "details": f"Initiated Step Functions workflow {execution_arn} for Plan {plan.plan_id}.",
+            "execution_type": execution_type,
+            "execution_id": execution_id,
+            "details": (
+                f"Initiated AWS Step Functions workflow {execution_arn} for Plan {plan.plan_id}."
+                if execution_arn else
+                f"Initiated local simulated workflow execution {execution_id} for Plan {plan.plan_id}."
+            ),
         })
 
         # ── Step 2: Inventory Update ─────────────────────────────────────────
@@ -220,7 +233,9 @@ class WorkflowExecutor:
         })
 
         workflow_summary = {
+            "execution_id": execution_id,
             "execution_arn": execution_arn,
+            "execution_type": execution_type,
             "status": "SUCCEEDED",
             "started_at": now_iso,
             "completed_at": datetime.utcnow().isoformat(),
