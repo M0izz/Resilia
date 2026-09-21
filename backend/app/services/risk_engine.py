@@ -149,7 +149,7 @@ class PHCRiskResult:
 
 @dataclass
 class MultiFactorRiskResult:
-    """Sprint 2: Enhanced risk result with cascading compound analysis."""
+    """Sprint 2 & Phase 3: Enhanced risk result with cascading compound analysis and audited factor attribution."""
     phc_id: str
 
     # Final cascaded score (base × multiplier, capped at 100)
@@ -166,17 +166,22 @@ class MultiFactorRiskResult:
 
     # Component sub-scores (pre-cascade)
     sub_scores: dict                     # {"medicine": int, "bed": int, ...}
+    factor_contributions: dict           # Percentage contribution of each factor to base risk
+
+    # Audited policy and triggered rules
+    policy_version: str = "2026.03.1"
+    triggered_rules: list[str] = field(default_factory=list)
 
     # Worst medicine reference
-    worst_medicine: Optional[str]
-    worst_days_of_stock: Optional[float]
-    medicine_details: list[MedicineRiskResult]
+    worst_medicine: Optional[str] = None
+    worst_days_of_stock: Optional[float] = None
+    medicine_details: list[MedicineRiskResult] = field(default_factory=list)
 
     # Plain-English agent explanation
-    agent_explanation: str
+    agent_explanation: str = ""
 
     # Full factor list from base scoring
-    factors: list[str]
+    factors: list[str] = field(default_factory=list)
 
 
 # ─── Core calculations ────────────────────────────────────────────────────
@@ -457,6 +462,64 @@ def score_phc_multifactor(inp: PHCRiskInput) -> MultiFactorRiskResult:
             f"Severity escalated to {severity.value}. Immediate review recommended."
         )
 
+    # ── Factor Contributions & Audited Rules (Phase 3) ──
+    sub_scores = {
+        "medicine":  base_result.medicine_score,
+        "bed":       base_result.bed_score,
+        "doctor":    base_result.doctor_score,
+        "surge":     base_result.surge_score,
+        "supplier":  base_result.supplier_score,
+    }
+
+    if base_score > 0:
+        factor_contributions = {
+            k: round((v / base_score) * 100.0, 1) for k, v in sub_scores.items()
+        }
+    else:
+        factor_contributions = {k: 0.0 for k in sub_scores}
+
+    triggered_rules: list[str] = []
+    if base_result.worst_days_of_stock is not None:
+        if base_result.worst_days_of_stock < 3:
+            triggered_rules.append("RULE-STOCK-CRITICAL-3D")
+        elif base_result.worst_days_of_stock < 7:
+            triggered_rules.append("RULE-STOCK-WARNING-7D")
+        elif base_result.worst_days_of_stock < 14:
+            triggered_rules.append("RULE-STOCK-ADVISORY-14D")
+
+    if inp.beds_total > 0:
+        bed_util = (inp.beds_occupied / inp.beds_total) * 100
+        if bed_util > 95:
+            triggered_rules.append("RULE-BED-OVERFLOW-95")
+        elif bed_util > 85:
+            triggered_rules.append("RULE-BED-HIGH-85")
+
+    if inp.doctors_total > 0:
+        doc_att = (inp.doctors_present / inp.doctors_total) * 100
+        if doc_att < 50:
+            triggered_rules.append("RULE-DOCTOR-SHORTAGE-50")
+        elif doc_att < 75:
+            triggered_rules.append("RULE-DOCTOR-LOW-75")
+
+    if inp.patient_7d_change_pct > 30:
+        triggered_rules.append("RULE-SURGE-SEVERE-30")
+    elif inp.patient_7d_change_pct > 15:
+        triggered_rules.append("RULE-SURGE-MODERATE-15")
+
+    if inp.supplier_delay_days > 7:
+        triggered_rules.append("RULE-SUPPLIER-SEVERE-7D")
+    elif inp.supplier_delay_days > 3:
+        triggered_rules.append("RULE-SUPPLIER-MODERATE-3D")
+
+    if n_factors == 3:
+        triggered_rules.append("RULE-CASCADE-ALL3")
+    elif has_low_stock and has_surge:
+        triggered_rules.append("RULE-CASCADE-STOCK-SURGE")
+    elif has_low_stock and has_delay:
+        triggered_rules.append("RULE-CASCADE-STOCK-SUPPLIER")
+    elif has_surge and has_delay:
+        triggered_rules.append("RULE-CASCADE-SURGE-SUPPLIER")
+
     return MultiFactorRiskResult(
         phc_id=inp.phc_id,
         risk_score=cascaded_score,
@@ -465,13 +528,10 @@ def score_phc_multifactor(inp: PHCRiskInput) -> MultiFactorRiskResult:
         base_score=base_score,
         cascade_multiplier=multiplier,
         active_compounding_factors=active_factors,
-        sub_scores={
-            "medicine":  base_result.medicine_score,
-            "bed":       base_result.bed_score,
-            "doctor":    base_result.doctor_score,
-            "surge":     base_result.surge_score,
-            "supplier":  base_result.supplier_score,
-        },
+        sub_scores=sub_scores,
+        factor_contributions=factor_contributions,
+        policy_version="2026.03.1",
+        triggered_rules=triggered_rules,
         worst_medicine=base_result.worst_medicine,
         worst_days_of_stock=base_result.worst_days_of_stock,
         medicine_details=base_result.medicine_details,
