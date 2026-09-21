@@ -12,15 +12,16 @@ Design:
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,8 @@ class OperationalEvent:
 
     # Auto-populated
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    source: str = "resilia.operational"
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    source: str = "resilia.telemetry"
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +61,20 @@ class OperationalEvent:
             "timestamp":  self.timestamp,
             "source":     self.source,
             "payload":    self.payload,
+        }
+
+    def to_eventbridge_entry(self) -> dict:
+        """Serialize into an official AWS EventBridge PutEventsRequestEntry."""
+        from app.config import settings
+        # Resources ARN matches official RESILIA facility pattern
+        facility_arn = f"arn:aws:resilia:{settings.aws_region}::facility/{self.phc_id}"
+        return {
+            "Time": datetime.now(timezone.utc),
+            "Source": self.source,
+            "Resources": [facility_arn],
+            "DetailType": self.event_type.value,
+            "Detail": json.dumps(self.payload),
+            "EventBusName": settings.event_bus_name or "default",
         }
 
 
@@ -101,6 +116,29 @@ class EventBus:
 
     # ── Emission ──
 
+    def _publish_to_eventbridge(self, event: OperationalEvent) -> Optional[dict]:
+        """Optionally dispatch event to AWS EventBridge if enabled or in staging/prod."""
+        from app.config import settings
+        if not (settings.eventbridge_enabled or settings.environment in ("staging", "production")):
+            return None
+        try:
+            import boto3
+            client_kwargs = {
+                "region_name": settings.aws_region,
+                "aws_access_key_id": settings.aws_access_key_id,
+                "aws_secret_access_key": settings.aws_secret_access_key,
+            }
+            if settings.eventbridge_endpoint:
+                client_kwargs["endpoint_url"] = settings.eventbridge_endpoint
+            client = boto3.client("events", **client_kwargs)
+            entry = event.to_eventbridge_entry()
+            resp = client.put_events(Entries=[entry])
+            logger.info("EventBridge PutEvents dispatched successfully for event %s: %s", event.event_id, resp.get("Entries", []))
+            return resp
+        except Exception as exc:
+            logger.warning("EventBridge PutEvents failed (%s) — event processed locally.", exc)
+            return None
+
     def emit(self, event: OperationalEvent) -> str:
         """
         Emit an event — non-blocking.
@@ -112,6 +150,7 @@ class EventBus:
             "EventBus EMIT %-25s phc=%-15s id=%s",
             event.event_type.value, event.phc_id, event.event_id[:8],
         )
+        self._publish_to_eventbridge(event)
         return event.event_id
 
     # ── Recent events (for dashboard) ──

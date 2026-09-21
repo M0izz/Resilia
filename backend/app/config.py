@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     api_version: str = "1.0.0"
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8501"]
 
+    # AWS EventBridge
+    event_bus_name: str = "resilia-event-bus"
+    eventbridge_enabled: bool = False
+    eventbridge_endpoint: Optional[str] = None
+
     @property
     def should_fail_fast(self) -> bool:
         if self.dynamodb_fail_fast is not None:
