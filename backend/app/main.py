@@ -1,10 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.db.dynamodb import create_tables
+from app.db.dynamodb import create_tables, get_data_source, is_dynamodb_online, PersistenceUnavailableError
 from app.routers import (
     health, phcs, inventory, patients, beds, staff,
     alerts, shipments, interventions,
@@ -87,6 +88,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(PersistenceUnavailableError)
+async def persistence_error_handler(request: Request, exc: PersistenceUnavailableError):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)},
+        headers={
+            "X-Resilia-Data-Source": "UNAVAILABLE",
+            "X-Resilia-Environment": settings.environment,
+        },
+    )
+
+
+@app.middleware("http")
+async def persistence_guard_middleware(request: Request, call_next):
+    # In non-local environments (or if should_fail_fast is True), reject requests if DynamoDB is unreachable
+    if settings.should_fail_fast and not is_dynamodb_online():
+        exempt_paths = ["/health", "/docs", "/openapi.json", "/redoc"]
+        if request.url.path not in exempt_paths:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": f"Primary persistence unavailable: DynamoDB connection failed in '{settings.environment}' environment."},
+                headers={
+                    "X-Resilia-Data-Source": "UNAVAILABLE",
+                    "X-Resilia-Environment": settings.environment,
+                },
+            )
+    response = await call_next(request)
+    response.headers["X-Resilia-Data-Source"] = get_data_source()
+    response.headers["X-Resilia-Environment"] = settings.environment
+    return response
+
 
 # ─── Routers — Sprint 1 ───────────────────────────────────────────────────
 app.include_router(health.router)

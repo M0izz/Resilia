@@ -1,3 +1,4 @@
+from typing import Literal, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,10 +12,19 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = "local"
 
     # App
-    environment: str = "local"
+    environment: Literal["local", "staging", "production"] = "local"
+    dynamodb_fail_fast: Optional[bool] = None
+    demo_mode: bool = False
+    step_functions_arn: Optional[str] = None
     api_title: str = "RESILIA — Healthcare Resilience Platform"
     api_version: str = "1.0.0"
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8501"]
+
+    @property
+    def should_fail_fast(self) -> bool:
+        if self.dynamodb_fail_fast is not None:
+            return self.dynamodb_fail_fast
+        return self.environment in ("staging", "production")
 
     # DynamoDB table names
     table_phcs: str = "resilia-phcs"

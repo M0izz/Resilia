@@ -20,6 +20,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class PersistenceUnavailableError(RuntimeError):
+    """Raised when DynamoDB is offline in an environment requiring real persistence."""
+    pass
+
+
 def get_data_source() -> str:
     """Return 'LIVE' when DynamoDB is online, 'SYNTHETIC-IN-MEMORY' otherwise.
 
@@ -86,64 +91,82 @@ def is_dynamodb_online() -> bool:
 
 
 class ResilientTableWrapper:
-    """Wraps DynamoDB table operations with transparent fallback to in-memory store."""
+    """Wraps DynamoDB table operations with transparent fallback to in-memory store in local mode."""
 
     def __init__(self, table_name: str):
         self.table_name = table_name
+
+    def _check_persistence(self):
+        if settings.should_fail_fast and not is_dynamodb_online():
+            raise PersistenceUnavailableError(
+                f"Primary persistence unavailable: DynamoDB connection failed for table '{self.table_name}' in '{settings.environment}' environment."
+            )
 
     def _get_real_table(self):
         return get_resource().Table(self.table_name)
 
     def get_item(self, **kwargs) -> dict:
+        self._check_persistence()
         if is_dynamodb_online():
             try:
                 resp = self._get_real_table().get_item(**kwargs)
                 if "Item" in resp:
                     return resp
-            except Exception:
-                pass
+            except Exception as exc:
+                if settings.should_fail_fast:
+                    raise PersistenceUnavailableError(f"DynamoDB get_item error in '{settings.environment}': {exc}")
         key = kwargs.get("Key", {})
         item = in_memory_store.get_item(self.table_name, key)
         return {"Item": item} if item else {}
 
     def put_item(self, **kwargs) -> dict:
-        item = kwargs.get("Item", {})
-        in_memory_store.put_item(self.table_name, item)
+        self._check_persistence()
         if is_dynamodb_online():
             try:
-                return self._get_real_table().put_item(**kwargs)
-            except Exception:
-                pass
+                resp = self._get_real_table().put_item(**kwargs)
+                in_memory_store.put_item(self.table_name, kwargs.get("Item", {}))
+                return resp
+            except Exception as exc:
+                if settings.should_fail_fast:
+                    raise PersistenceUnavailableError(f"DynamoDB put_item error in '{settings.environment}': {exc}")
+        item = kwargs.get("Item", {})
+        in_memory_store.put_item(self.table_name, item)
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def update_item(self, **kwargs) -> dict:
+        self._check_persistence()
         if is_dynamodb_online():
             try:
                 return self._get_real_table().update_item(**kwargs)
-            except Exception:
-                pass
+            except Exception as exc:
+                if settings.should_fail_fast:
+                    raise PersistenceUnavailableError(f"DynamoDB update_item error in '{settings.environment}': {exc}")
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def scan(self, **kwargs) -> dict:
+        self._check_persistence()
         if is_dynamodb_online():
             try:
                 resp = self._get_real_table().scan(**kwargs)
                 if "Items" in resp and len(resp["Items"]) > 0:
                     return resp
-            except Exception:
-                pass
+            except Exception as exc:
+                if settings.should_fail_fast:
+                    raise PersistenceUnavailableError(f"DynamoDB scan error in '{settings.environment}': {exc}")
         filter_expr = kwargs.get("FilterExpression")
         items = in_memory_store.get_table_items(self.table_name, filter_expr=filter_expr)
         return {"Items": items, "Count": len(items)}
 
     def query(self, **kwargs) -> dict:
+        self._check_persistence()
         if is_dynamodb_online():
             try:
                 resp = self._get_real_table().query(**kwargs)
                 if "Items" in resp and len(resp["Items"]) > 0:
                     return resp
-            except Exception:
-                pass
+            except Exception as exc:
+                if settings.should_fail_fast:
+                    raise PersistenceUnavailableError(f"DynamoDB query error in '{settings.environment}': {exc}")
         key_condition = kwargs.get("KeyConditionExpression")
         filter_expr = kwargs.get("FilterExpression")
         index_name = kwargs.get("IndexName")
@@ -349,12 +372,21 @@ def create_tables() -> None:
                     raise
     except Exception as exc:
         _dynamodb_online = False
+        if settings.should_fail_fast:
+            logger.error("DynamoDB connection failed in '%s' environment: %s", settings.environment, exc)
+            raise PersistenceUnavailableError(
+                f"Primary persistence unavailable: DynamoDB connection failed in '{settings.environment}' environment: {exc}"
+            )
         logger.info("DynamoDB local endpoint offline (%s) — activating in-memory resilience layer.", exc)
 
 
 # ─── Generic helpers ───────────────────────────────────────────────────────
 
 def scan_all(table_name: str, filter_expr=None) -> list[dict]:
+    if settings.should_fail_fast and not is_dynamodb_online():
+        raise PersistenceUnavailableError(
+            f"Primary persistence unavailable: DynamoDB connection failed for table '{table_name}' in '{settings.environment}' environment."
+        )
     if is_dynamodb_online():
         try:
             table = get_resource().Table(table_name)
@@ -371,11 +403,17 @@ def scan_all(table_name: str, filter_expr=None) -> list[dict]:
             if items:
                 return items
         except Exception as exc:
+            if settings.should_fail_fast:
+                raise PersistenceUnavailableError(f"DynamoDB scan_all error in '{settings.environment}': {exc}")
             logger.debug("DynamoDB scan_all failed (%s) — using in-memory store for %s", exc, table_name)
     return in_memory_store.get_table_items(table_name, filter_expr)
 
 
 def query_gsi(table_name: str, index_name: str, key_condition, filter_expr=None) -> list[dict]:
+    if settings.should_fail_fast and not is_dynamodb_online():
+        raise PersistenceUnavailableError(
+            f"Primary persistence unavailable: DynamoDB connection failed for table '{table_name}' in '{settings.environment}' environment."
+        )
     if is_dynamodb_online():
         try:
             table = get_resource().Table(table_name)
@@ -392,6 +430,8 @@ def query_gsi(table_name: str, index_name: str, key_condition, filter_expr=None)
             if items:
                 return items
         except Exception as exc:
+            if settings.should_fail_fast:
+                raise PersistenceUnavailableError(f"DynamoDB query_gsi error in '{settings.environment}': {exc}")
             logger.debug("DynamoDB query_gsi failed (%s) — using in-memory store for %s", exc, table_name)
     return in_memory_store.query_table(table_name, index_name, key_condition, filter_expr)
 

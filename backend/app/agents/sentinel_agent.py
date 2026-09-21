@@ -244,6 +244,30 @@ class SentinelAgent:
             else:
                 patient_surge_pct = float(phc.get("patient_7d_change_pct", 0))
 
+            # Telemetry Quality & Freshness Assessment (Phase 1)
+            from app.services.data_quality import assess_phc_telemetry_quality
+            from app.config import settings
+            quality = assess_phc_telemetry_quality(phc, inventory)
+
+            if not quality.can_evaluate_risk and not settings.demo_mode:
+                decision = AgentDecision(
+                    phc_id=phc_id,
+                    phc_name=phc_name,
+                    trigger=trigger,
+                    risk_score=0,
+                    risk_severity=RiskSeverity.UNKNOWN.value,
+                    base_score=0,
+                    cascade_multiplier=1.0,
+                    active_compounding_factors=["DATA_GAP"],
+                    reasoning=quality.explanation,
+                    action_taken="DATA_GAP_ALERT",
+                    alert_id=None,
+                )
+                with self._lock:
+                    self._decisions.appendleft(decision)
+                logger.warning("Sentinel: PHC %s risk is UNKNOWN due to data quality: %s", phc_id, quality.explanation)
+                return decision
+
             # Build risk input
             med_inputs = []
             for item in inventory:

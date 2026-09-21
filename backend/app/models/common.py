@@ -7,6 +7,7 @@ class RiskSeverity(str, Enum):
     WATCH = "WATCH"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
+    UNKNOWN = "UNKNOWN"
     # Backward compatibility aliases for existing seeded records
     LOW = "LOW"
     MEDIUM = "MEDIUM"
