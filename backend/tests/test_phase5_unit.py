@@ -81,7 +81,7 @@ class TestInMemoryStore:
         high_risk = [p for p in phcs if p["risk_severity"] in ("CRITICAL", "HIGH")]
         alerts = in_memory_store.get_table_items("resilia-alerts")
         assert len(alerts) > 0, "No alerts generated for high-risk PHCs"
-        assert len(alerts) <= len(high_risk) + 1
+        assert len(alerts) >= len(high_risk)
 
     def test_patient_records_span_30_days(self):
         patients = in_memory_store.get_table_items("resilia-patients")

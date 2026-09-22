@@ -3473,7 +3473,8 @@ def render_response_center():
             status_badge_color = "#10B981" if is_approved else "#EF4444" if is_rejected else "#F59E0B"
             conf = plan.get("confidence", {})
             conf_rating = conf.get("rating", "HIGH")
-            conf_score = conf.get("score_pct", 94.0)
+            conf_score = conf.get("score_pct")
+            conf_display = f"{conf_rating} ({conf_score:.1f}%)" if conf_score is not None else conf_rating
             is_cross = plan.get("is_cross_district", False)
             cross_badge = " Cross-District Redistribution" if is_cross else " Intra-District Transfer"
 
@@ -3497,7 +3498,7 @@ def render_response_center():
                 <div class="intervention-meta">
                     <span class="meta-chip">️ ETA: {float(plan.get('eta_hours', 5.0)):.1f} hours</span>
                     <span class="meta-chip"> Vehicle: {plan.get('assigned_vehicle_id', 'V-17')}</span>
-                    <span class="meta-chip"> Confidence: {conf_rating} ({conf_score:.1f}%)</span>
+                    <span class="meta-chip"> Confidence: {conf_display}</span>
                     <span class="meta-chip">{cross_badge}</span>
                     <span class="meta-chip">ID:  {plan_id}</span>
                 </div>
@@ -3509,17 +3510,25 @@ def render_response_center():
             if not is_approved and not is_rejected:
                 col_app, col_mod, col_rej = st.columns([1.5, 1.2, 1.2])
                 with col_app:
-                    if st.button("OK:  APPROVE INTERVENTION", key=f"btn_app_{plan_id}", type="primary", use_container_width=True):
-                        res = api_post_nocache(
-                            f"/optimization/plans/{plan_id}/approve",
-                            {"approved_by": "Dr. Priya Sharma (District Health Officer)", "note": "Approved by DHO after surplus & route verification"},
-                        )
-                        st.toast("Intervention Approved! Step Functions pipeline initiated.")
-                        st.balloons()
-                        st.rerun()
+                    with st.popover("APPROVE INTERVENTION", use_container_width=True):
+                        st.markdown("**Authorize Intervention Transfer**")
+                        st.caption("Human digital sign-off is legally committed to the immutable SHA-256 audit ledger.")
+                        approver_name = st.text_input("Approver Name & Title", value="Dr. Priya Sharma (District Health Officer)", key=f"app_name_{plan_id}")
+                        approval_note = st.text_input("Authorization Note", value="Approved after route and surplus verification", key=f"app_note_{plan_id}")
+                        if st.button("Confirm Digital Signature & Execute", key=f"btn_app_confirm_{plan_id}", type="primary", use_container_width=True):
+                            if not approver_name.strip():
+                                st.error("Approver name cannot be blank.")
+                            else:
+                                res = api_post_nocache(
+                                    f"/optimization/plans/{plan_id}/approve",
+                                    {"approved_by": approver_name.strip(), "note": approval_note.strip()},
+                                )
+                                st.toast("Intervention Approved! Step Functions pipeline initiated.")
+                                st.balloons()
+                                st.rerun()
 
                 with col_mod:
-                    with st.popover("️ MODIFY", use_container_width=True):
+                    with st.popover("MODIFY", use_container_width=True):
                         st.markdown("**Modify Allocation Parameters**")
                         cur_units = float(plan.get("total_units", 1000.0))
                         new_units = st.number_input("Override Units", min_value=100.0, max_value=5000.0, value=cur_units, step=100.0, key=f"inp_mod_{plan_id}")
@@ -3533,7 +3542,7 @@ def render_response_center():
                             st.rerun()
 
                 with col_rej:
-                    with st.popover("FAIL:  REJECT", use_container_width=True):
+                    with st.popover("REJECT", use_container_width=True):
                         st.markdown("**Reject Intervention**")
                         rej_reason = st.text_area("Rejection Reason", "Central emergency order already arriving via express corridor.", key=f"inp_rej_{plan_id}")
                         if st.button("Confirm Rejection", key=f"rej_sub_{plan_id}", type="secondary"):
@@ -3544,9 +3553,9 @@ def render_response_center():
                             st.warning("Intervention rejected.")
                             st.rerun()
             elif is_approved:
-                st.success(f"OK:  Approved by **{plan.get('approved_by', 'Health Officer')}** at {plan.get('approved_at', 'recently')}. Step Functions workflow active.")
+                st.success(f"Approved by **{plan.get('approved_by', 'Health Officer')}** at {plan.get('approved_at', 'recently')}. Step Functions workflow active.")
             elif is_rejected:
-                st.error(f"FAIL:  {plan.get('rejection_reason', 'Rejected by administrator')}")
+                st.error(f"{plan.get('rejection_reason', 'Rejected by administrator')}")
 
             # Inspector Tabs
             t1, t2, t3 = st.tabs([
@@ -3565,7 +3574,7 @@ def render_response_center():
                     st.markdown("**Recommended Operational Action**")
                     st.markdown(f"> {plan.get('recommended_action', 'Redistribution transfer.')}")
 
-                    st.markdown("**Expected Clinical Impact**")
+                    st.markdown("**Operational Stockout Mitigation Impact**")
                     st.markdown(f"> {plan.get('expected_impact', 'Stockout mitigated.')}")
 
                     impact = plan.get("impact_metrics", {})

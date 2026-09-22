@@ -135,19 +135,22 @@ def test_sentinel_emits_unknown_for_stale_data(monkeypatch):
     stale_time = (datetime.now(timezone.utc) - timedelta(hours=96)).isoformat()
     test_phc_id = "PHC-TEST-STALE-001"
     
-    in_memory_store.put_item("resilia-phcs", {
-        "phc_id": test_phc_id,
-        "name": "Stale PHC",
-        "last_updated": stale_time,
-        "beds_total": 10,
-        "beds_occupied": 5,
-        "doctors_total": 2,
-        "doctors_present": 2,
-    })
+    try:
+        in_memory_store.put_item("resilia-phcs", {
+            "phc_id": test_phc_id,
+            "name": "Stale PHC",
+            "last_updated": stale_time,
+            "beds_total": 10,
+            "beds_occupied": 5,
+            "doctors_total": 2,
+            "doctors_present": 2,
+        })
 
-    # Evaluate PHC via Sentinel
-    decision = sentinel_agent._evaluate_phc(test_phc_id, trigger="UNIT_TEST")
-    assert decision is not None
-    assert decision.risk_severity == RiskSeverity.UNKNOWN.value
-    assert decision.action_taken == "DATA_GAP_ALERT"
-    assert "DATA_GAP" in decision.active_compounding_factors
+        # Evaluate PHC via Sentinel
+        decision = sentinel_agent._evaluate_phc(test_phc_id, trigger="UNIT_TEST")
+        assert decision is not None
+        assert decision.risk_severity == RiskSeverity.UNKNOWN.value
+        assert decision.action_taken == "DATA_GAP_ALERT"
+        assert "DATA_GAP" in decision.active_compounding_factors
+    finally:
+        in_memory_store.delete_item("resilia-phcs", {"phc_id": test_phc_id})

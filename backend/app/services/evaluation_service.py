@@ -181,8 +181,23 @@ def _compute_optimization_metrics(inventory: List[dict], shipments: List[dict]) 
 
     # Compute network-wide deficit and surplus for a representative medicine
     target_med = "ORS-001"
-    deficit_items = [i for i in inventory if i["medicine_code"] == target_med and i["status"] in ("CRITICAL", "LOW")]
-    surplus_items = [i for i in inventory if i["medicine_code"] == target_med and i["status"] == "SURPLUS"]
+
+    def _get_status(item: dict) -> str:
+        s = item.get("status")
+        if s:
+            return s
+        qty = float(item.get("quantity", 0))
+        reorder = float(item.get("reorder_level", 500))
+        if qty < reorder * 0.5:
+            return "CRITICAL"
+        elif qty < reorder:
+            return "LOW"
+        elif qty > reorder * 2.0:
+            return "SURPLUS"
+        return "NORMAL"
+
+    deficit_items = [i for i in inventory if i.get("medicine_code") == target_med and _get_status(i) in ("CRITICAL", "LOW")]
+    surplus_items = [i for i in inventory if i.get("medicine_code") == target_med and _get_status(i) == "SURPLUS"]
 
     total_deficit = sum(max(0.0, i.get("reorder_level", 500) - i.get("quantity", 0)) for i in deficit_items)
     total_surplus = sum(max(0.0, i.get("quantity", 0) - i.get("reorder_level", 500)) for i in surplus_items)

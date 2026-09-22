@@ -572,6 +572,23 @@ class ResilientInMemoryStore:
                 return
         items.append(dict(item))
 
+    def delete_item(self, table_name: str, key: dict) -> bool:
+        """Delete an item by key from the in-memory table."""
+        self._ensure_initialized()
+        items = self.tables.get(table_name, [])
+        for idx, item in enumerate(items):
+            if all(item.get(k) == v for k, v in key.items()):
+                items.pop(idx)
+                return True
+        return False
+
+    def reset(self) -> None:
+        """Reset in-memory store to fresh seed data."""
+        self._initialized = False
+        for k in self.tables:
+            self.tables[k] = []
+        self._ensure_initialized()
+
 
 def matches_condition(item: dict, cond) -> bool:
     """Evaluate DynamoDB condition against an in-memory dictionary item."""
