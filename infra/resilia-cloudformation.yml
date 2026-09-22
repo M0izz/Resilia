@@ -100,13 +100,46 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
-  # ─── 3. EVENTBRIDGE EVENT BUS ────────────────────────────────────────────
+  # ─── 3. EVENTBRIDGE EVENT BUS & ROUTING RULES ────────────────────────────
   ResiliaEventBus:
     Type: AWS::Events::EventBus
     Properties:
       Name: !Sub ResiliaEventBus-${Environment}
 
+  ResiliaDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub resilia-dlq-${Environment}
+      MessageRetentionPeriod: 1209600 # 14 days
+      KmsMasterKeyId: alias/aws/sqs
+
+  CriticalTelemetryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub Resilia-CriticalTelemetryRule-${Environment}
+      Description: Routes CRITICAL and HIGH severity telemetry alerts
+      EventBusName: !Ref ResiliaEventBus
+      EventPattern:
+        source:
+          - resilia.telemetry
+        detail-type:
+          - OperationalTelemetry
+        detail:
+          severity:
+            - CRITICAL
+            - HIGH
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ResiliaDeadLetterQueue.Arn
+          Id: ResiliaDeadLetterQueueTarget
+
   # ─── 4. AWS STEP FUNCTIONS STATE MACHINE ─────────────────────────────────
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/ResiliaInterventionPipeline-${Environment}
+      RetentionInDays: 30
+
   ResiliaInterventionStateMachineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -127,55 +160,202 @@ Resources:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
-                Resource: !GetAtt InventoryTable.Arn
+                Resource:
+                  - !GetAtt InventoryTable.Arn
+                  - !GetAtt AuditLedgerTable.Arn
               - Effect: Allow
                 Action:
                   - events:PutEvents
                 Resource: !GetAtt ResiliaEventBus.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
 
   ResiliaInterventionPipeline:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: !Sub ResiliaInterventionPipeline-${Environment}
       RoleArn: !GetAtt ResiliaInterventionStateMachineRole.Arn
+      LoggingConfiguration:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StepFunctionsLogGroup.Arn
       DefinitionString: !Sub |
         {
-          "Comment": "RESILIA Autonomous Redistribution & Intervention State Machine",
-          "StartAt": "ValidateSurplusCapacity",
+          "Comment": "RESILIA Human-Governed Intervention Execution Pipeline with Idempotency and Audit Integrity",
+          "StartAt": "ValidateHumanApproval",
           "States": {
-            "ValidateSurplusCapacity": {
-              "Type": "Pass",
-              "Result": { "validation_status": "PASSED" },
-              "ResultPath": "$.validation",
-              "Next": "UpdateSourceInventory"
+            "ValidateHumanApproval": {
+              "Type": "Choice",
+              "Comment": "Enforce strict human-in-the-loop governance: unapproved interventions must not proceed",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.approval.status",
+                      "StringEquals": "APPROVED"
+                    },
+                    {
+                      "Variable": "$.approval.approved_by",
+                      "IsPresent": true
+                    }
+                  ],
+                  "Next": "CheckExecutionIdempotency"
+                }
+              ],
+              "Default": "InterventionHaltedUnapproved"
             },
-            "UpdateSourceInventory": {
-              "Type": "Pass",
-              "Result": { "debit_status": "COMPLETED" },
-              "ResultPath": "$.debit",
-              "Next": "UpdateTargetInventory"
+            "InterventionHaltedUnapproved": {
+              "Type": "Fail",
+              "Error": "HumanApprovalRequired",
+              "Cause": "Execution halted: Intervention lacks authorized human signature (DHO/National Commander)."
             },
-            "UpdateTargetInventory": {
-              "Type": "Pass",
-              "Result": { "credit_status": "COMPLETED" },
-              "ResultPath": "$.credit",
-              "Next": "DispatchCarrier"
+            "CheckExecutionIdempotency": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Comment": "Verify intervention execution key has not been processed previously",
+              "Parameters": {
+                "TableName": "${AuditLedgerTable}",
+                "Key": {
+                  "audit_id": {
+                    "S.$": "$.idempotency_key"
+                  }
+                }
+              },
+              "ResultPath": "$.idempotency_record",
+              "Next": "EvaluateIdempotencyResult"
             },
-            "DispatchCarrier": {
-              "Type": "Pass",
-              "Result": { "dispatch_status": "IN_TRANSIT", "carrier_id": "V-17" },
-              "ResultPath": "$.shipment",
-              "Next": "EmitEventBridgeNotification"
+            "EvaluateIdempotencyResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.idempotency_record.Item",
+                  "IsPresent": true,
+                  "Next": "InterventionAlreadyExecuted"
+                }
+              ],
+              "Default": "DebitDonorInventory"
             },
-            "EmitEventBridgeNotification": {
-              "Type": "Pass",
-              "Result": { "event_published": true },
-              "ResultPath": "$.notification",
-              "Next": "WriteImmutableAuditRecord"
+            "InterventionAlreadyExecuted": {
+              "Type": "Fail",
+              "Error": "DuplicateExecutionKey",
+              "Cause": "Idempotent execution guard: Intervention transaction was previously executed and committed."
             },
-            "WriteImmutableAuditRecord": {
-              "Type": "Pass",
-              "Result": { "audit_logged": true },
+            "DebitDonorInventory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Comment": "Atomically debit source PHC inventory with safety-stock balance condition",
+              "Parameters": {
+                "TableName": "${InventoryTable}",
+                "Key": {
+                  "phc_id": {
+                    "S.$": "$.donor_phc_id"
+                  },
+                  "medicine_code": {
+                    "S.$": "$.medicine_code"
+                  }
+                },
+                "UpdateExpression": "SET quantity = quantity - :transfer_qty",
+                "ConditionExpression": "quantity >= :transfer_qty",
+                "ExpressionAttributeValues": {
+                  ":transfer_qty": {
+                    "N.$": "$.quantity_str"
+                  }
+                }
+              },
+              "ResultPath": "$.donor_debit_result",
+              "Catch": [
+                {
+                  "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"],
+                  "Next": "InsufficientDonorInventoryHalt"
+                }
+              ],
+              "Next": "CreditRecipientInventory"
+            },
+            "InsufficientDonorInventoryHalt": {
+              "Type": "Fail",
+              "Error": "InsufficientInventory",
+              "Cause": "Donor PHC stock insufficient to fulfill transfer without breaching safety reserves."
+            },
+            "CreditRecipientInventory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Comment": "Credit recipient PHC inventory",
+              "Parameters": {
+                "TableName": "${InventoryTable}",
+                "Key": {
+                  "phc_id": {
+                    "S.$": "$.recipient_phc_id"
+                  },
+                  "medicine_code": {
+                    "S.$": "$.medicine_code"
+                  }
+                },
+                "UpdateExpression": "SET quantity = quantity + :transfer_qty",
+                "ExpressionAttributeValues": {
+                  ":transfer_qty": {
+                    "N.$": "$.quantity_str"
+                  }
+                }
+              },
+              "ResultPath": "$.recipient_credit_result",
+              "Next": "PublishDispatchEvent"
+            },
+            "PublishDispatchEvent": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Comment": "Publish immutable INTERVENTION_DISPATCHED event to EventBridge",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "EventBusName": "${ResiliaEventBus}",
+                    "Source": "resilia.intervention",
+                    "DetailType": "InterventionDispatched",
+                    "Detail.$": "States.JsonToString($.intervention_summary)"
+                  }
+                ]
+              },
+              "ResultPath": "$.event_result",
+              "Next": "RecordImmutableAuditEntry"
+            },
+            "RecordImmutableAuditEntry": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:putItem",
+              "Comment": "Commit SHA-256 cryptographic audit ledger entry to DynamoDB",
+              "Parameters": {
+                "TableName": "${AuditLedgerTable}",
+                "Item": {
+                  "audit_id": {
+                    "S.$": "$.idempotency_key"
+                  },
+                  "action_type": {
+                    "S": "INTERVENTION_EXECUTED"
+                  },
+                  "actor_id": {
+                    "S.$": "$.approval.approved_by"
+                  },
+                  "actor_role": {
+                    "S.$": "$.approval.role"
+                  },
+                  "sha256_hash": {
+                    "S.$": "$.audit_hash"
+                  },
+                  "timestamp": {
+                    "S.$": "$.approval.approved_at"
+                  }
+                }
+              },
+              "ResultPath": "$.audit_result",
               "End": true
             }
           }
