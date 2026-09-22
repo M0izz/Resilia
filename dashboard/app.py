@@ -1377,94 +1377,92 @@ def render_phc_map(phcs: list[dict], title: str = "", map_style: str = "Dark Can
     )
 
     fig = go.Figure()
-    for sev, color in SEVERITY_COLORS.items():
+
+    SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    SEV_DISPLAY = {"CRITICAL": "Critical", "HIGH": "High", "MEDIUM": "Medium", "LOW": "Normal"}
+
+    for sev in SEV_ORDER:
+        color = SEVERITY_COLORS.get(sev, "#6B7280")
         subset = df[df["risk_severity"] == sev]
         if subset.empty:
             continue
 
+        marker_size = subset["size"].tolist()
+
         if sev == "CRITICAL":
-            # Glow halo for critical facilities matching reference image
-            fig.add_trace(go.Scattermapbox(
+            # Glow halo ring for critical facilities
+            fig.add_trace(go.Scattergeo(
                 lat=subset["lat"],
                 lon=subset["lng"],
                 mode="markers",
                 marker=dict(
-                    size=[s * 2.2 for s in subset["size"]],
+                    size=[s * 2.6 for s in marker_size],
                     color="#EF4444",
-                    opacity=0.32,
+                    opacity=0.22,
+                    line=dict(width=0),
                 ),
                 hoverinfo="skip",
                 showlegend=False,
             ))
 
-        fig.add_trace(go.Scattermapbox(
+        fig.add_trace(go.Scattergeo(
             lat=subset["lat"],
             lon=subset["lng"],
             mode="markers",
             marker=dict(
-                size=subset["size"],
+                size=marker_size,
                 color=color,
                 opacity=0.92,
+                line=dict(width=1.4, color="#0E162B"),
             ),
             text=subset["hover"],
             hovertemplate="%{text}<extra></extra>",
-            name=sev,
+            name=SEV_DISPLAY.get(sev, sev),
+            showlegend=True,
         ))
 
-    center_lat = 21.8 if len(df) > 20 else df["lat"].mean()
-    center_lon = 79.5 if len(df) > 20 else df["lng"].mean()
-    zoom_level = 4.2 if len(df) > 20 else 8.5
-
-    mapbox_cfg = dict(
-        center=dict(lat=center_lat, lon=center_lon),
-        zoom=zoom_level,
-    )
-
-    active_token = (mapbox_token or st.session_state.get("custom_mapbox_token") or MAPBOX_TOKEN or "").strip()
-    if active_token and active_token.startswith("pk.") and not active_token.startswith("pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA"):
-        mapbox_cfg["accesstoken"] = active_token
-        mapbox_cfg["style"] = "dark"
-    elif "Satellite" in map_style:
-        mapbox_cfg["style"] = "white-bg"
-        mapbox_cfg["layers"] = [
-            {
-                "below": "traces",
-                "sourcetype": "raster",
-                "source": [
-                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                ]
-            }
-        ]
-    elif "OpenStreetMap" in map_style:
-        mapbox_cfg["style"] = "open-street-map"
-    else:
-        # Pristine Dark Canvas basemap with national borders, oceans, cities, and zero watermarks
-        mapbox_cfg["style"] = "white-bg"
-        mapbox_cfg["layers"] = [
-            {
-                "below": "traces",
-                "sourcetype": "raster",
-                "source": [
-                    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-                ]
-            },
-            {
-                "below": "traces",
-                "sourcetype": "raster",
-                "source": [
-                    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
-                ]
-            }
-        ]
-
     fig.update_layout(
-        mapbox=mapbox_cfg,
+        geo=dict(
+            scope="asia",
+            projection_type="mercator",
+            showland=True,
+            landcolor="#111827",
+            showocean=True,
+            oceancolor="#080D1A",
+            showlakes=False,
+            showcountries=True,
+            countrycolor="rgba(255,255,255,0.12)",
+            countrywidth=0.8,
+            showsubunits=True,
+            subunitcolor="rgba(255,255,255,0.06)",
+            subunitwidth=0.5,
+            showcoastlines=True,
+            coastlinecolor="rgba(255,255,255,0.15)",
+            coastlinewidth=0.8,
+            showframe=False,
+            bgcolor="#080D1A",
+            lataxis=dict(range=[6, 38]),
+            lonaxis=dict(range=[67, 98]),
+            resolution=50,
+        ),
         paper_bgcolor="#0E162B",
         plot_bgcolor="#0E162B",
         margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False,
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=-0.04,
+            bgcolor="rgba(14,22,43,0.85)",
+            bordercolor="rgba(255,255,255,0.12)",
+            borderwidth=1,
+            font=dict(color="#CBD5E1", size=12),
+            itemsizing="constant",
+        ),
+        showlegend=True,
         height=510,
         title=None,
+        dragmode="pan",
     )
     return fig
 
@@ -1503,258 +1501,156 @@ def render_alert_feed(alerts: list[dict], max_items: int = 8):
 #  TAB 1 — COMMAND CENTER
 # ══════════════════════════════════════════════════════════════════════════
 
-# ─── Shared component: Google Maps PHC View ───────────────────────────────
+# ─── Shared component: Real Interactive PHC Map (Leaflet / OSM / Satellite) ─
 
-def render_google_maps_phc_view(phcs: list[dict], height: int = 480):
+def render_real_interactive_map(phcs: list[dict], height: int = 500, map_title: str = "PHC Network"):
     if not phcs:
         st.info("No facility geospatial data to display.")
         return
 
-    api_key = (st.session_state.get("google_maps_api_key") or GOOGLE_MAPS_API_KEY or "").strip()
-
-    # Prepare existing PHC data without any fabrication
     markers_payload = []
     for p in phcs:
-        lat = p.get("lat")
-        lng = p.get("lng")
+        lat = p.get("lat") or p.get("latitude")
+        lng = p.get("lng") or p.get("longitude")
         if lat is not None and lng is not None:
             try:
+                beds_t = int(p.get("beds_total") or 20)
+                beds_o = int(p.get("beds_occupied") or int(beds_t * 0.6))
+                doc_t  = int(p.get("doctors_total") or 2)
+                doc_p  = int(p.get("doctors_present") or 2)
+                occ    = round((beds_o / max(beds_t, 1)) * 100.0, 1)
+                sev    = str(p.get("risk_severity") or "LOW").upper()
                 markers_payload.append({
-                    "id": str(p.get("id", "")),
-                    "name": str(p.get("name", "PHC")),
-                    "district": str(p.get("district", "")),
-                    "state": str(p.get("state", "")),
-                    "lat": float(lat),
-                    "lng": float(lng),
-                    "severity": str(p.get("risk_severity", "LOW")).upper(),
-                    "score": round(float(p.get("risk_score", 0.0)), 2),
-                    "alerts": int(p.get("active_alerts", 0)),
-                    "beds": int(p.get("beds_total", 20)),
-                    "occupancy_rate": round(float(p.get("bed_occupancy_rate", 50.0)), 1),
+                    "id":              str(p.get("phc_id") or p.get("id") or ""),
+                    "name":            str(p.get("name") or "PHC"),
+                    "district":        str(p.get("district") or ""),
+                    "state":           str(p.get("state") or ""),
+                    "lat":             float(lat),
+                    "lng":             float(lng),
+                    "severity":        sev,
+                    "score":           round(float(p.get("risk_score") or 0.0), 2),
+                    "alerts":          int(p.get("active_alerts") or 0),
+                    "beds":            beds_t,
+                    "beds_occupied":   beds_o,
+                    "occupancy_rate":  occ,
+                    "doctors_total":   doc_t,
+                    "doctors_present": doc_p,
                 })
             except (ValueError, TypeError):
                 continue
 
     markers_json = json.dumps(markers_payload)
-    api_script_param = f"key={api_key}&" if api_key else ""
 
-    html_code = f"""<!DOCTYPE html>
+    # cdnjs is far more reliable than unpkg — no auth issues
+    # OSM tiles: completely free, no API key, no watermarks
+    html_code = (
+        """<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <style>
-        html, body {{
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background: #080D1A;
-            overflow: hidden;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }}
-        #map {{
-            width: 100%;
-            height: 100%;
-            border-radius: 8px;
-            background: #080D1A;
-        }}
-        /* InfoWindow Custom Dark Styling */
-        .gm-style .gm-style-iw-c {{
-            background-color: #0E162B !important;
-            color: #F8FAFC !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            border-radius: 8px !important;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
-            padding: 12px 14px !important;
-        }}
-        .gm-style .gm-style-iw-tc::after {{
-            background: #0E162B !important;
-        }}
-        .gm-style .gm-style-iw-d {{
-            overflow: auto !important;
-        }}
-        .gm-ui-hover-effect {{
-            filter: invert(1) !important;
-        }}
-        /* Suppress Google Maps keyless modal overlay */
-        .gm-err-container, .gm-err-autocomplete, div[class*="gm-err"], div[style*="z-index: 100000"] {{
-            display: none !important;
-            visibility: hidden !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-        }}
-        /* Map floating operational legend */
-        .map-floating-legend {{
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(14, 22, 43, 0.94);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 6px;
-            padding: 5px 12px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            z-index: 5;
-            font-size: 11px;
-            color: #94A3B8;
-        }}
-        .legend-chip {{
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-weight: 500;
-        }}
-        .legend-dot {{
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }}
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#080D1A;overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+#map{width:100%;height:100%}
+.leaflet-bar{border:1px solid rgba(255,255,255,.15)!important;border-radius:8px!important;
+  overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.6)!important}
+.leaflet-bar a{background:#0E162B!important;color:#F8FAFC!important;
+  border-bottom:1px solid rgba(255,255,255,.08)!important;
+  width:32px!important;height:32px!important;line-height:32px!important;
+  font-size:16px!important;font-weight:700!important}
+.leaflet-bar a:hover{background:#1E293B!important;color:#38BDF8!important}
+.leaflet-popup-content-wrapper{background:#0D1526!important;color:#F8FAFC!important;
+  border:1px solid rgba(255,255,255,.14)!important;border-radius:10px!important;
+  box-shadow:0 12px 36px rgba(0,0,0,.9)!important;padding:0!important;overflow:hidden}
+.leaflet-popup-content{margin:0!important;width:272px!important}
+.leaflet-popup-tip{background:#0D1526!important}
+.leaflet-container a.leaflet-popup-close-button{color:#64748B!important;
+  font-size:18px!important;padding:8px 8px 0 0!important}
+.leaflet-container a.leaflet-popup-close-button:hover{color:#FFF!important}
+.leaflet-tooltip{background:rgba(13,21,38,.97)!important;color:#F8FAFC!important;
+  border:1px solid rgba(255,255,255,.14)!important;border-radius:6px!important;
+  font-size:11px!important;font-weight:600!important;padding:4px 9px!important;
+  box-shadow:0 4px 12px rgba(0,0,0,.7)!important}
+.leaflet-tooltip-top::before{border-top-color:rgba(255,255,255,.14)!important}
+.leaflet-control-attribution{background:rgba(8,13,26,.85)!important;
+  color:#475569!important;font-size:10px!important}
+.leaflet-control-attribution a{color:#64748B!important}
+#legend{position:absolute;bottom:28px;left:10px;z-index:900;
+  background:rgba(13,21,38,.93);border:1px solid rgba(255,255,255,.11);
+  border-radius:7px;padding:6px 14px;
+  display:flex;align-items:center;gap:14px;
+  font-size:11px;font-weight:600;color:#94A3B8;backdrop-filter:blur(8px)}
+.lchip{display:flex;align-items:center;gap:5px}
+.ldot{width:9px;height:9px;border-radius:50%;display:inline-block}
+</style>
 </head>
 <body>
-    <div class="map-floating-legend">
-        <span style="font-weight: 700; color: #F8FAFC; letter-spacing: 0.3px;">PHC GRID:</span>
-        <div class="legend-chip"><span class="legend-dot" style="background: #10B981;"></span> Normal</div>
-        <div class="legend-chip"><span class="legend-dot" style="background: #3B82F6;"></span> Medium</div>
-        <div class="legend-chip"><span class="legend-dot" style="background: #F59E0B;"></span> High</div>
-        <div class="legend-chip"><span class="legend-dot" style="background: #EF4444;"></span> Critical</div>
-    </div>
-    <div id="map"></div>
-
-    <script src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"></script>
-    <script src="https://maps.googleapis.com/maps/api/js?{api_script_param}libraries=places,marker&callback=initGoogleMap" async defer></script>
-
-    <script>
-        const darkMapStyles = [
-            {{ "elementType": "geometry", "stylers": [{{ "color": "#0d1527" }}] }},
-            {{ "elementType": "labels.text.stroke", "stylers": [{{ "color": "#080d1a" }}] }},
-            {{ "elementType": "labels.text.fill", "stylers": [{{ "color": "#94a3b8" }}] }},
-            {{ "featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{{ "color": "#cbd5e1" }}] }},
-            {{ "featureType": "administrative.country", "elementType": "geometry.stroke", "stylers": [{{ "color": "#3b82f6" }}, {{ "weight": 1.2 }}] }},
-            {{ "featureType": "administrative.province", "elementType": "geometry.stroke", "stylers": [{{ "color": "#334155" }}, {{ "weight": 0.8 }}] }},
-            {{ "featureType": "poi", "stylers": [{{ "visibility": "off" }}] }},
-            {{ "featureType": "road", "elementType": "geometry", "stylers": [{{ "color": "#1e293b" }}] }},
-            {{ "featureType": "road", "elementType": "geometry.stroke", "stylers": [{{ "color": "#0f172a" }}] }},
-            {{ "featureType": "road.highway", "elementType": "geometry", "stylers": [{{ "color": "#283449" }}] }},
-            {{ "featureType": "transit", "stylers": [{{ "visibility": "off" }}] }},
-            {{ "featureType": "water", "elementType": "geometry", "stylers": [{{ "color": "#080d1a" }}] }},
-            {{ "featureType": "water", "elementType": "labels.text.fill", "stylers": [{{ "color": "#475569" }}] }}
-        ];
-
-        const SEV_COLORS = {{
-            "CRITICAL": "#EF4444",
-            "HIGH": "#F59E0B",
-            "MEDIUM": "#3B82F6",
-            "WATCH": "#3B82F6",
-            "LOW": "#10B981",
-            "NORMAL": "#10B981"
-        }};
-
-        const phcRecords = {markers_json};
-
-        function initGoogleMap() {{
-            const defaultCenter = {{ lat: 21.8, lng: 79.5 }};
-            const map = new google.maps.Map(document.getElementById("map"), {{
-                zoom: 4.8,
-                center: defaultCenter,
-                styles: darkMapStyles,
-                mapTypeId: google.maps.MapTypeId.ROADMAP,
-                backgroundColor: "#080D1A",
-                streetViewControl: false,
-                mapTypeControl: true,
-                mapTypeControlOptions: {{
-                    style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
-                    position: google.maps.ControlPosition.TOP_RIGHT
-                }},
-                zoomControl: true,
-                fullscreenControl: true
-            }});
-
-            const infoWindow = new google.maps.InfoWindow({{
-                maxWidth: 280
-            }});
-
-            const markers = [];
-
-            phcRecords.forEach(p => {{
-                const color = SEV_COLORS[p.severity] || "#10B981";
-                const isCrit = p.severity === "CRITICAL";
-                const isHigh = p.severity === "HIGH";
-
-                const marker = new google.maps.Marker({{
-                    position: {{ lat: p.lat, lng: p.lng }},
-                    map: map,
-                    title: p.name + " (" + p.severity + ")",
-                    icon: {{
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: isCrit ? 9 : (isHigh ? 7.5 : 6),
-                        fillColor: color,
-                        fillOpacity: 0.95,
-                        strokeColor: isCrit ? "#FFFFFF" : "#0E162B",
-                        strokeWeight: isCrit ? 2 : 1.5
-                    }}
-                }});
-
-                marker.addListener("click", () => {{
-                    const badgeBg = color + "22";
-                    const content = `
-                        <div style="font-family:'Plus Jakarta Sans',-apple-system,sans-serif; color:#F8FAFC; line-height:1.4;">
-                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
-                                <div style="font-weight:700; font-size:13px; color:#FFFFFF;">${{p.name}}</div>
-                                <span style="background:${{badgeBg}}; color:${{color}}; border:1px solid ${{color}}66; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; margin-left:8px;">${{p.severity}}</span>
-                            </div>
-                            <div style="color:#94A3B8; font-size:11px; margin-bottom:8px;">${{p.district}}, ${{p.state}} &bull; <span style="font-family:monospace; color:#CBD5E1;">${{p.id}}</span></div>
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; border-top:1px solid rgba(255,255,255,0.1); padding-top:6px;">
-                                <div><span style="color:#64748B;">Beds:</span> <b>${{p.beds}}</b> (${{p.occupancy_rate}}%)</div>
-                                <div><span style="color:#64748B;">Active Alerts:</span> <b style="color:${{p.alerts > 0 ? '#F59E0B' : '#10B981'}};">${{p.alerts}}</b></div>
-                                <div><span style="color:#64748B;">Risk Score:</span> <b>${{p.score}}</b></div>
-                                <div><span style="color:#64748B;">Status:</span> <span style="color:#10B981; font-weight:600;">Operational</span></div>
-                            </div>
-                        </div>
-                    `;
-                    infoWindow.setContent(content);
-                    infoWindow.open(map, marker);
-                }});
-
-                markers.push(marker);
-            }});
-
-            // Auto dismiss developer warning modal if shown
-            const modalObserver = new MutationObserver(() => {{
-                const okBtn = document.querySelector('.dismissButton') || 
-                              Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.trim() === 'OK');
-                if (okBtn) {{
-                    okBtn.click();
-                }}
-            }});
-            modalObserver.observe(document.body, {{ childList: true, subtree: true }});
-
-            // Initialize marker clustering if library is loaded
-            if (typeof markerClusterer !== "undefined" && markerClusterer.MarkerClusterer) {{
-                new markerClusterer.MarkerClusterer({{
-                    map: map,
-                    markers: markers
-                }});
-            }}
-        }}
-
-        // Catch authentication errors gracefully
-        window.gm_authFailure = function() {{
-            const mapDiv = document.getElementById("map");
-            if (mapDiv) {{
-                const msg = document.createElement("div");
-                msg.style = "position:absolute; bottom:12px; left:12px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); color:#FCA5A5; padding:8px 12px; border-radius:6px; font-size:11px; z-index:10;";
-                msg.innerHTML = "<b>Google Maps Notice:</b> Set <code>GOOGLE_MAPS_API_KEY</code> with Maps JavaScript API enabled to activate licensed mode.";
-                mapDiv.appendChild(msg);
-            }}
-        }};
-    </script>
+<div id="map"></div>
+<div id="legend">
+  <span style="color:#CBD5E1;font-weight:700;letter-spacing:.3px">PHC STATUS</span>
+  <span class="lchip"><span class="ldot" style="background:#EF4444"></span>Critical</span>
+  <span class="lchip"><span class="ldot" style="background:#F59E0B"></span>High</span>
+  <span class="lchip"><span class="ldot" style="background:#3B82F6"></span>Medium</span>
+  <span class="lchip"><span class="ldot" style="background:#10B981"></span>Normal</span>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+var DATA="""
+        + markers_json
+        + """;
+var osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:"&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
+  maxZoom:19,minZoom:3});
+var map=L.map("map",{center:[22.5,80],zoom:5,scrollWheelZoom:true,
+  doubleClickZoom:true,touchZoom:true,layers:[osm]});
+map.zoomControl.setPosition("topleft");
+var C={CRITICAL:"#EF4444",HIGH:"#F59E0B",MEDIUM:"#3B82F6",WATCH:"#3B82F6",LOW:"#10B981",NORMAL:"#10B981"};
+var ll=[];
+DATA.forEach(function(p){
+  var col=C[p.severity]||"#10B981";
+  var r=p.severity==="CRITICAL"?9:(p.severity==="HIGH"?7:5.5);
+  ll.push([p.lat,p.lng]);
+  var m=L.circleMarker([p.lat,p.lng],{
+    radius:r,fillColor:col,
+    color:p.severity==="CRITICAL"?"#fff":"rgba(8,13,26,0.7)",
+    weight:p.severity==="CRITICAL"?2:1,opacity:1,fillOpacity:0.92
+  }).addTo(map);
+  m.bindTooltip("<b>"+p.name+"</b><br><span style='color:"+col+";font-weight:700'>"+p.severity+"</span> &bull; "+p.district,
+    {direction:"top",offset:[0,-6]});
+  var bp=Math.min(100,p.occupancy_rate);
+  var alertCol=p.alerts>0?"#F59E0B":"#10B981";
+  m.bindPopup(
+    "<div style='padding:13px 15px;font-family:-apple-system,sans-serif;'>"+
+    "<div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;'>"+
+    "<span style='font-weight:700;font-size:13px;color:#F8FAFC;'>"+p.name+"</span>"+
+    "<span style='background:"+col+"22;color:"+col+";border:1px solid "+col+"55;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:700;margin-left:6px;'>"+p.severity+"</span></div>"+
+    "<div style='color:#64748B;font-size:11px;margin-bottom:10px;'>"+p.district+", "+p.state+" &bull; <code style='color:#94A3B8;font-size:10px;'>"+p.id+"</code></div>"+
+    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:5px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;'>"+
+    "<div><span style='color:#64748B;'>Risk Score:</span> <strong style='color:"+col+";'>"+p.score+"</strong></div>"+
+    "<div><span style='color:#64748B;'>Alerts:</span> <strong style='color:"+alertCol+";'>"+p.alerts+"</strong></div>"+
+    "<div><span style='color:#64748B;'>Beds:</span> <strong style='color:#F8FAFC;'>"+p.beds_occupied+"/"+p.beds+"</strong></div>"+
+    "<div><span style='color:#64748B;'>Doctors:</span> <strong style='color:#F8FAFC;'>"+p.doctors_present+"/"+p.doctors_total+"</strong></div></div>"+
+    "<div style='font-size:11px;color:#64748B;'>Bed Occupancy: <strong style='color:#F8FAFC;'>"+p.occupancy_rate+"%</strong>"+
+    "<div style='width:100%;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;margin-top:4px;overflow:hidden;'>"+
+    "<div style='width:"+bp+"%;height:100%;background:"+col+";border-radius:2px;'></div></div></div></div>",
+    {maxWidth:295});
+});
+if(ll.length>0){map.fitBounds(L.latLngBounds(ll),{padding:[30,30]});}
+</script>
 </body>
 </html>"""
+    )
 
     components.html(html_code, height=height, scrolling=False)
+
+
+def render_google_maps_phc_view(phcs: list[dict], height: int = 480):
+    """Backward-compatible alias routing to the real interactive map component."""
+    return render_real_interactive_map(phcs, height=height, map_title="Geospatial PHC Surveillance Map")
+
 
 
 # ─── Shared component: Independently Scrollable Alert Feed ────────────────
@@ -1851,40 +1747,20 @@ def render_command_center():
         st.markdown("""
         <div style="background:#0E162B; border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-radius:8px 8px 0 0; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
             <div>
-                <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">Geospatial PHC Surveillance Map</div>
-                <div style="font-size:0.75rem; color:#94A3B8;">Official Google Maps Platform &bull; Active India Health Grid</div>
+                <div style="font-size:0.95rem; font-weight:700; color:#F8FAFC;">PHC Network Map</div>
+                <div style="font-size:0.75rem; color:#94A3B8;">Live facility status · India Health Grid</div>
             </div>
             <div style="display:flex; align-items:center; gap:6px;">
-                <span style="background:rgba(59,130,246,0.15); color:#60A5FA; border:1px solid rgba(59,130,246,0.3); padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:700;">GOOGLE MAPS PLATFORM</span>
+                <span style="background:rgba(16,185,129,0.12); color:#10B981; border:1px solid rgba(16,185,129,0.25); padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:700;">● LIVE</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
         phcs = load_phcs(selected_state_code, district_code)
         if phcs:
-            render_google_maps_phc_view(phcs, height=480)
+            render_real_interactive_map(phcs, height=500)
         else:
             st.info("No PHC data to display. Run the seed script to populate the database.")
-
-        with st.expander("🔑 Google Maps Platform Configuration (Optional API Key)", expanded=False):
-            c_k1, c_k2 = st.columns([3, 1])
-            with c_k1:
-                user_key = st.text_input(
-                    "Google Maps API Key",
-                    value=st.session_state.get("google_maps_api_key", GOOGLE_MAPS_API_KEY),
-                    type="password",
-                    placeholder="AIzaSy...",
-                    help="Loaded from GOOGLE_MAPS_API_KEY environment variable. Enter a custom key here if needed."
-                )
-                if user_key != st.session_state.get("google_maps_api_key"):
-                    st.session_state["google_maps_api_key"] = user_key
-                    os.environ["GOOGLE_MAPS_API_KEY"] = user_key
-            with c_k2:
-                st.caption("Status:")
-                if user_key:
-                    st.success("API Key Active")
-                else:
-                    st.info("Dev/Preview Mode")
 
     with alert_col:
         st.markdown("""
@@ -2232,11 +2108,7 @@ def render_phc_network():
         </div>
         """, unsafe_allow_html=True)
 
-        fig = render_phc_map(phcs, "PHC Network")
-        if fig.data:
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        else:
-            st.info("No facility geospatial data to display.")
+        render_real_interactive_map(phcs, height=500)
 
     with side_col:
         # Card 1: Network Summary
