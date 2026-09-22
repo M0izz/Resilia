@@ -6,9 +6,9 @@ for all autonomous agent recommendations, human approvals, and workflow executio
 from __future__ import annotations
 import threading
 import logging
-from typing import List, Dict, Optional, Any
-from datetime import datetime, timedelta
-
+from typing import List, Dict, Optional, Any, Tuple
+from datetime import datetime, timedelta, timezone
+from app.config import settings
 from app.models.audit import (
     AIDecisionAuditRecord,
     AuditTrailQueryResponse,
@@ -31,6 +31,7 @@ class AIDecisionAuditLedger:
 
     def _seed_initial_audit_trail(self) -> None:
         """Seed initial immutable audit decisions demonstrating past operational milestones."""
+        arn_base = settings.step_functions_arn
         seeds = [
             {
                 "audit_id": "AUD-2026-0811",
@@ -43,8 +44,8 @@ class AIDecisionAuditLedger:
                 "ai_recommendation": "Redistribute 1,100 ORS-001 units from PHC Pimpri Hub (18.7 days surplus) via carrier V-17.",
                 "optimization_engine": "Google OR-Tools SCIP Mixed-Integer Linear Programming (MILP)",
                 "approved_by": "Dr. Priya Sharma (District Health Officer, Pune)",
-                "executed_action": "AWS Step Functions state machine executed: debited PHC-018, credited PHC-042, carrier V-17 dispatched.",
-                "execution_arn": "arn:aws:states:us-east-1:123456789012:execution:ResiliaInterventionPipeline:exec-0811",
+                "executed_action": "Intervention workflow executed: debited PHC-018, credited PHC-042, carrier V-17 dispatched.",
+                "execution_arn": f"{arn_base}:exec-0811" if arn_base else None,
                 "minutes_ago": 180,
             },
             {
@@ -58,8 +59,8 @@ class AIDecisionAuditLedger:
                 "ai_recommendation": "Cross-district transfer of 1,200 PCTM-001 units from PHC Shirwal Central (Satara) via Express Corridor.",
                 "optimization_engine": "Google OR-Tools SCIP with Distance & Cross-District Penalty Constraints",
                 "approved_by": "Dr. Anand Kulkarni (Divisional Health Commissioner, Pune Division)",
-                "executed_action": "AWS Step Functions state machine executed: cross-district logistics waiver applied, carrier V-09 dispatched.",
-                "execution_arn": "arn:aws:states:us-east-1:123456789012:execution:ResiliaInterventionPipeline:exec-0812",
+                "executed_action": "Intervention workflow executed: cross-district logistics waiver applied, carrier V-09 dispatched.",
+                "execution_arn": f"{arn_base}:exec-0812" if arn_base else None,
                 "minutes_ago": 120,
             },
             {
@@ -74,14 +75,14 @@ class AIDecisionAuditLedger:
                 "optimization_engine": "Multi-Echelon Capacity Redistribution Engine",
                 "approved_by": "Dr. Rajiv Deshmukh (Civil Surgeon, Aundh Hospital)",
                 "executed_action": "Dispatched emergency replenishment from Central Medical Depot WH-PUN-01; emitted EventBridge alert BED_OVERFLOW_AVERTED.",
-                "execution_arn": "arn:aws:states:us-east-1:123456789012:execution:ResiliaInterventionPipeline:exec-0813",
+                "execution_arn": f"{arn_base}:exec-0813" if arn_base else None,
                 "minutes_ago": 45,
             },
         ]
 
         prev_hash = "0" * 64
         for i, s in enumerate(seeds):
-            dt = datetime.utcnow() - timedelta(minutes=s["minutes_ago"])
+            dt = datetime.now(timezone.utc) - timedelta(minutes=s["minutes_ago"])
             rec = AIDecisionAuditRecord(
                 audit_id=s["audit_id"],
                 sequence_number=i + 1,
@@ -126,7 +127,7 @@ class AIDecisionAuditLedger:
             rec = AIDecisionAuditRecord(
                 audit_id=audit_id,
                 sequence_number=seq,
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 facility_id=facility_id,
                 facility_name=facility_name,
                 district=district,

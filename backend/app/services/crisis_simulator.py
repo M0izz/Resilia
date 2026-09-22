@@ -358,5 +358,54 @@ class CrisisSimulatorEngine:
             executive_summary=summary,
         )
 
+    @classmethod
+    def run_monte_carlo_stress_test(
+        cls,
+        scenario: ParsedCrisisScenario,
+        num_iterations: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Run Monte Carlo stochastic stress-testing with randomized footfall and transit shocks.
+        Reports empirical P10, P50, and P90 percentiles.
+        """
+        import numpy as np
+
+        safeguarded_list = []
+        avoided_stockouts_list = []
+        resilience_gains = []
+        baseline_scores = []
+        mitigated_scores = []
+
+        for i in range(num_iterations):
+            # Introduce stochastic variance (±15% surge variance, ±1.0 day delay variance)
+            var_scenario = scenario.model_copy()
+            jitter = (random.random() - 0.5) * 0.3  # -15% to +15%
+            var_scenario.surge_pct = max(5.0, scenario.surge_pct * (1.0 + jitter))
+            var_scenario.supply_disruption_days = max(0.5, scenario.supply_disruption_days + (random.random() - 0.5) * 2.0)
+
+            comp = cls.run_crisis_stress_test(var_scenario)
+            safeguarded_list.append(comp.safeguarded_patients)
+            avoided_stockouts_list.append(comp.avoided_stockouts)
+            resilience_gains.append(comp.resilience_gain_pct)
+            baseline_scores.append(comp.resilience_score_baseline)
+            mitigated_scores.append(comp.resilience_score_mitigated)
+
+        def pct(arr, q):
+            return round(float(np.percentile(arr, q)), 1)
+
+        return {
+            "disease": scenario.disease,
+            "region": scenario.region,
+            "iterations_evaluated": num_iterations,
+            "confidence_intervals": {
+                "safeguarded_patients": {"p10": pct(safeguarded_list, 10), "p50": pct(safeguarded_list, 50), "p90": pct(safeguarded_list, 90)},
+                "avoided_stockouts": {"p10": pct(avoided_stockouts_list, 10), "p50": pct(avoided_stockouts_list, 50), "p90": pct(avoided_stockouts_list, 90)},
+                "resilience_gain_pct": {"p10": pct(resilience_gains, 10), "p50": pct(resilience_gains, 50), "p90": pct(resilience_gains, 90)},
+                "baseline_resilience": {"p10": pct(baseline_scores, 10), "p50": pct(baseline_scores, 50), "p90": pct(baseline_scores, 90)},
+                "mitigated_resilience": {"p10": pct(mitigated_scores, 10), "p50": pct(mitigated_scores, 50), "p90": pct(mitigated_scores, 90)},
+            },
+            "interpretation": f"Empirical Monte Carlo evaluation across {num_iterations} stochastic crisis trajectories.",
+        }
+
 
 crisis_simulator = CrisisSimulatorEngine()
