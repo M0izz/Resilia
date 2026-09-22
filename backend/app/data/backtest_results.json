@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-22T08:06:59.365153",
+  "generated_at": "2026-09-22T10:01:41.861355",
   "evaluation_status": "SYNTHETIC-DEMO-CERTIFIED",
   "data_source": "SYNTHETIC-DEMO",
   "disclaimer": "All metrics are computed on the 75-PHC synthetic demo dataset bundled with this repository. They reflect the algorithm's behaviour on that dataset \u2014 NOT a live production deployment.",
@@ -15,7 +15,7 @@
   },
   "optimization": {
     "shortage_reduction_pct": 100.0,
-    "mean_solver_runtime_ms": 685.92,
+    "mean_solver_runtime_ms": 75.43,
     "average_fleet_eta_hours": 4.0,
     "logistics_cost_savings_pct": 0.0,
     "safety_stock_violations_count": 0,
@@ -27,16 +27,16 @@
     "network_resilience_gain_pct": 16.1,
     "avoided_cascading_breakdowns": 23,
     "safeguarded_patient_care_episodes": 23612,
-    "simulation_speed_multiplier": 377770978.0,
+    "simulation_speed_multiplier": 610341908.0,
     "data_source": "SYNTHETIC-DEMO"
   },
   "system_performance": {
-    "api_latency_p50_ms": 18.0,
-    "api_latency_p95_ms": 21.3,
-    "api_latency_p99_ms": 21.6,
+    "api_latency_p50_ms": 16.8,
+    "api_latency_p95_ms": 20.3,
+    "api_latency_p99_ms": 20.6,
     "step_functions_success_rate_pct": 100.0,
     "eventbridge_throughput_events_per_sec": 24,
-    "dynamodb_query_latency_ms": 1.897,
+    "dynamodb_query_latency_ms": 0.71,
     "agent_autonomous_execution_success_pct": 100.0,
     "data_source": "SYNTHETIC-DEMO"
   },
@@ -73,7 +73,7 @@
       "rmse": 11.94,
       "coverage_90pct": 0.223,
       "n_samples": 1148,
-      "trained_at": "2026-09-22T08:06:57.656802+00:00"
+      "trained_at": "2026-09-22T10:01:41.271314+00:00"
     }
   }
 }

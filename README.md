@@ -77,7 +77,7 @@ This table applies to **every quantitative claim** in this README. All benchmark
                                                      ▼
                                      ┌───────────────────────────────┐
                                      │  ⚡ RESPONSE AGENT (SYNTHESIS) │
-                                     │ Clinical Justification        │
+                                     │ Operational Rationale         │
                                      └───────────────┬───────────────┘
                                                      │
                                                      ▼
