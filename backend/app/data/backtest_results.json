@@ -1,0 +1,79 @@
+{
+  "generated_at": "2026-09-22T08:06:59.365153",
+  "evaluation_status": "SYNTHETIC-DEMO-CERTIFIED",
+  "data_source": "SYNTHETIC-DEMO",
+  "disclaimer": "All metrics are computed on the 75-PHC synthetic demo dataset bundled with this repository. They reflect the algorithm's behaviour on that dataset \u2014 NOT a live production deployment.",
+  "forecasting": {
+    "mae_units": 3.93,
+    "rmse_units": 5.51,
+    "stockout_prediction_accuracy_pct": 99.9,
+    "lead_time_warning_days": 7.6,
+    "precision_pct": 100.0,
+    "recall_pct": 100.0,
+    "test_evaluations_count": 1230,
+    "data_source": "SYNTHETIC-DEMO"
+  },
+  "optimization": {
+    "shortage_reduction_pct": 100.0,
+    "mean_solver_runtime_ms": 685.92,
+    "average_fleet_eta_hours": 4.0,
+    "logistics_cost_savings_pct": 0.0,
+    "safety_stock_violations_count": 0,
+    "constraint_satisfaction_rate_pct": 100.0,
+    "data_source": "SYNTHETIC-DEMO"
+  },
+  "simulation": {
+    "crisis_detection_lead_time_hours": 132.3,
+    "network_resilience_gain_pct": 16.1,
+    "avoided_cascading_breakdowns": 23,
+    "safeguarded_patient_care_episodes": 23612,
+    "simulation_speed_multiplier": 377770978.0,
+    "data_source": "SYNTHETIC-DEMO"
+  },
+  "system_performance": {
+    "api_latency_p50_ms": 18.0,
+    "api_latency_p95_ms": 21.3,
+    "api_latency_p99_ms": 21.6,
+    "step_functions_success_rate_pct": 100.0,
+    "eventbridge_throughput_events_per_sec": 24,
+    "dynamodb_query_latency_ms": 1.897,
+    "agent_autonomous_execution_success_pct": 100.0,
+    "data_source": "SYNTHETIC-DEMO"
+  },
+  "overall_resilience_score": 100.0,
+  "walk_forward_forecasting": {
+    "mae": 7.1303259781998225,
+    "rmse": 11.940648864665713,
+    "r2": 0.0845342646472228,
+    "coverage_90pct": 0.2229965156794425,
+    "total_test_points": 1148,
+    "total_folds": 164,
+    "model_artifact": "C:\\Users\\Moiz\\Desktop\\PROJECTS\\Resilia\\backend\\models\\model_v1.0.0.json",
+    "metadata": {
+      "version": "1.0.0",
+      "model_type": "RidgeRegression-Autoregressive",
+      "alpha": 1.0,
+      "features_used": [
+        "t_step",
+        "dow_0",
+        "dow_1",
+        "dow_2",
+        "dow_3",
+        "dow_4",
+        "dow_5",
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "lag_7",
+        "roll_mean_7",
+        "roll_std_7"
+      ],
+      "r2_score": 0.0845,
+      "mae": 7.13,
+      "rmse": 11.94,
+      "coverage_90pct": 0.223,
+      "n_samples": 1148,
+      "trained_at": "2026-09-22T08:06:57.656802+00:00"
+    }
+  }
+}

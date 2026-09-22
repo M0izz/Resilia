@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "model_type": "RidgeRegression-Autoregressive",
+  "alpha": 1.0,
+  "features_used": [
+    "t_step",
+    "dow_0",
+    "dow_1",
+    "dow_2",
+    "dow_3",
+    "dow_4",
+    "dow_5",
+    "lag_1",
+    "lag_2",
+    "lag_3",
+    "lag_7",
+    "roll_mean_7",
+    "roll_std_7"
+  ],
+  "r2_score": 0.0845,
+  "mae": 7.13,
+  "rmse": 11.94,
+  "coverage_90pct": 0.223,
+  "n_samples": 1148,
+  "trained_at": "2026-09-22T08:06:57.656802+00:00"
+}
