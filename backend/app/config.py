@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     eventbridge_enabled: bool = False
     eventbridge_endpoint: Optional[str] = None
 
+    # Amazon Bedrock
+    bedrock_enabled: bool = False
+    bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+
     @property
     def should_fail_fast(self) -> bool:
         if self.dynamodb_fail_fast is not None:
