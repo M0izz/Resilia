@@ -533,14 +533,41 @@ class ResilientInMemoryStore:
             items = [i for i in items if matches_condition(i, filter_expr)]
         return [dict(i) for i in items]
 
+    def update_item(self, table_name: str, key: dict, attribute_updates: dict) -> bool:
+        self._ensure_initialized()
+        items = self.tables.get(table_name, [])
+        for idx, item in enumerate(items):
+            if all(item.get(k) == v for k, v in key.items()):
+                item.update(attribute_updates)
+                return True
+        return False
+
     def put_item(self, table_name: str, item: dict) -> None:
         self._ensure_initialized()
         if table_name not in self.tables:
             self.tables[table_name] = []
         items = self.tables[table_name]
-        primary_key = "phc_id" if "phc_id" in item else list(item.keys())[0]
+
+        # Determine composite or single primary key
+        if table_name == "resilia-inventory" or ("phc_id" in item and "medicine_code" in item):
+            key_attrs = ["phc_id", "medicine_code"]
+        elif table_name in ("resilia-patients", "resilia-staff"):
+            key_attrs = ["phc_id", "date"]
+        elif table_name == "resilia-shipments":
+            key_attrs = ["shipment_id", "phc_id"]
+        elif "phc_id" in item:
+            key_attrs = ["phc_id"]
+        elif "alert_id" in item:
+            key_attrs = ["alert_id"]
+        elif "intervention_id" in item:
+            key_attrs = ["intervention_id"]
+        elif "supplier_id" in item:
+            key_attrs = ["supplier_id"]
+        else:
+            key_attrs = [list(item.keys())[0]]
+
         for idx, existing in enumerate(items):
-            if existing.get(primary_key) == item.get(primary_key):
+            if all(existing.get(k) == item.get(k) for k in key_attrs):
                 items[idx] = dict(item)
                 return
         items.append(dict(item))

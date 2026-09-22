@@ -141,6 +141,23 @@ class ResilientTableWrapper:
             except Exception as exc:
                 if settings.should_fail_fast:
                     raise PersistenceUnavailableError(f"DynamoDB update_item error in '{settings.environment}': {exc}")
+
+        # In local/fallback mode: apply update expression to in_memory_store
+        key = kwargs.get("Key", {})
+        update_expr = kwargs.get("UpdateExpression", "")
+        expr_vals = kwargs.get("ExpressionAttributeValues", {})
+        if key and update_expr:
+            item = in_memory_store.get_item(self.table_name, key)
+            if item:
+                if "quantity = quantity - :q" in update_expr and ":q" in expr_vals:
+                    new_q = max(0.0, float(item.get("quantity", 0)) - float(expr_vals[":q"]))
+                    in_memory_store.update_item(self.table_name, key, {"quantity": new_q})
+                elif "quantity = quantity + :q" in update_expr and ":q" in expr_vals:
+                    new_q = float(item.get("quantity", 0)) + float(expr_vals[":q"])
+                    in_memory_store.update_item(self.table_name, key, {"quantity": new_q})
+                elif "SET quantity = :q" in update_expr and ":q" in expr_vals:
+                    in_memory_store.update_item(self.table_name, key, {"quantity": float(expr_vals[":q"])})
+
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def scan(self, **kwargs) -> dict:
