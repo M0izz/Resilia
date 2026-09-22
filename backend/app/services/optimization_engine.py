@@ -59,17 +59,19 @@ class OptimizationEngine:
         deficit_units: float,
         candidates: list[SurplusCandidate],
         vehicle_capacity: float = 3000.0,
+        max_distance_km: float = 400.0,
     ) -> OptimizationResult:
         """
-        Solve optimal multi-facility redistribution using OR-Tools SCIP solver.
+        Solve optimal multi-facility redistribution using OR-Tools SCIP/GLOP solver.
         """
         start_time = time.perf_counter()
 
         if deficit_units <= 0:
             return OptimizationResult(
                 status="NO_DEFICIT",
+                solver_name="Google OR-Tools (Trivial Check)",
                 objective_value=0.0,
-                runtime_ms=0.0,
+                runtime_ms=round((time.perf_counter() - start_time) * 1000, 2),
                 target_phc_id=target_phc_id,
                 medicine_code=medicine_code,
                 medicine_name=medicine_name,
@@ -82,9 +84,17 @@ class OptimizationEngine:
                 constraints_satisfied=["Target PHC has adequate stock; no rebalancing required."],
             )
 
-        if not candidates:
+        # Filter candidates by maximum distance constraint
+        eligible_candidates = [c for c in candidates if c.distance_km <= max_distance_km]
+
+        if not eligible_candidates:
+            reason = (
+                f"All {len(candidates)} candidates exceed max radius constraint of {max_distance_km:.0f} km."
+                if candidates else "No candidate facilities with eligible surplus found in network."
+            )
             return OptimizationResult(
-                status="NO_SURPLUS",
+                status="INFEASIBLE" if candidates else "NO_SURPLUS",
+                solver_name="Google OR-Tools (Feasibility Pre-Check)",
                 objective_value=0.0,
                 runtime_ms=round((time.perf_counter() - start_time) * 1000, 2),
                 target_phc_id=target_phc_id,
@@ -94,30 +104,36 @@ class OptimizationEngine:
                 total_allocated_units=0.0,
                 unmet_deficit_units=deficit_units,
                 allocated_routes=[],
-                candidates_evaluated=0,
-                surplus_candidates=[],
-                constraints_satisfied=["No candidate facilities with eligible surplus found in network."],
+                candidates_evaluated=len(candidates),
+                surplus_candidates=candidates,
+                constraints_satisfied=[reason],
             )
 
         try:
             from ortools.linear_solver import pywraplp
 
             # Initialize SCIP Mixed-Integer Linear Programming Solver
+            solver_type = "SCIP"
             solver = pywraplp.Solver.CreateSolver("SCIP")
             if not solver:
+                solver_type = "GLOP"
                 solver = pywraplp.Solver.CreateSolver("GLOP")
             if not solver:
                 raise RuntimeError("Failed to create OR-Tools solver instance")
 
-            num_candidates = len(candidates)
+            num_candidates = len(eligible_candidates)
             x = {}  # Transfer quantities (integer)
             y = {}  # Binary activation flags
 
             # Decision Variables
-            for i, cand in enumerate(candidates):
+            for i, cand in enumerate(eligible_candidates):
                 upper_bound = min(cand.available_surplus_units, vehicle_capacity, deficit_units)
-                x[i] = solver.IntVar(0.0, upper_bound, f"x_{cand.phc_id}")
-                y[i] = solver.BoolVar(f"y_{cand.phc_id}")
+                if solver_type == "SCIP":
+                    x[i] = solver.IntVar(0.0, upper_bound, f"x_{cand.phc_id}")
+                    y[i] = solver.BoolVar(f"y_{cand.phc_id}")
+                else:
+                    x[i] = solver.NumVar(0.0, upper_bound, f"x_{cand.phc_id}")
+                    y[i] = solver.NumVar(0.0, 1.0, f"y_{cand.phc_id}")
 
                 # Linking constraint: x[i] <= upper_bound * y[i]
                 solver.Add(x[i] <= upper_bound * y[i])
@@ -125,16 +141,16 @@ class OptimizationEngine:
             # Global Deficit constraint: sum(x[i]) <= deficit_units
             solver.Add(solver.Sum(x[i] for i in range(num_candidates)) <= deficit_units)
 
-            # Target satisfaction goal: if total surplus >= deficit, encourage full coverage
-            total_available = sum(c.available_surplus_units for c in candidates)
+            # Target satisfaction goal
+            total_available = sum(c.available_surplus_units for c in eligible_candidates)
             target_coverage = min(deficit_units, total_available)
-            # Add mild lower bound to satisfy deficit if feasible
-            solver.Add(solver.Sum(x[i] for i in range(num_candidates)) >= target_coverage * 0.95)
+            if target_coverage > 0:
+                solver.Add(solver.Sum(x[i] for i in range(num_candidates)) >= target_coverage * 0.90)
 
             # Multi-objective formulation:
             # Minimize: Cost(distance) + Urgency(ETA) + DispatchFee - FULFILLMENT_VALUE * Allocation
             objective = solver.Objective()
-            for i, cand in enumerate(candidates):
+            for i, cand in enumerate(eligible_candidates):
                 unit_travel_cost = (cand.distance_km * COST_PER_UNIT_KM) + (cand.eta_hours * ETA_WEIGHT_PER_HOUR)
                 net_unit_coefficient = unit_travel_cost - FULFILLMENT_VALUE
                 objective.SetCoefficient(x[i], net_unit_coefficient)
@@ -142,18 +158,19 @@ class OptimizationEngine:
 
             objective.SetMinimization()
 
-            # Execute solver
+            # Execute solver with wall-clock timing
             solver_status = solver.Solve()
-            runtime_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            runtime_ms = max(0.01, round((time.perf_counter() - start_time) * 1000, 2))
 
-            is_optimal = solver_status in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE)
-            status_str = "OPTIMAL" if solver_status == pywraplp.Solver.OPTIMAL else "FEASIBLE" if is_optimal else "INFEASIBLE"
+            is_optimal = solver_status == pywraplp.Solver.OPTIMAL
+            is_feasible = solver_status == pywraplp.Solver.FEASIBLE
+            status_str = "OPTIMAL" if is_optimal else ("FEASIBLE" if is_feasible else "INFEASIBLE")
 
             allocated_routes: list[AllocationRoute] = []
             total_allocated = 0.0
 
-            if is_optimal:
-                for i, cand in enumerate(candidates):
+            if is_optimal or is_feasible:
+                for i, cand in enumerate(eligible_candidates):
                     qty = round(x[i].solution_value(), 0)
                     if qty > 0:
                         total_allocated += qty
@@ -281,8 +298,8 @@ class OptimizationEngine:
                 )
 
         return OptimizationResult(
-            status="OPTIMAL",
-            solver_name="RESILIA Greedy Proximity Fallback",
+            status="HEURISTIC_FEASIBLE" if total_allocated > 0 else "NO_SURPLUS",
+            solver_name="RESILIA Greedy Proximity Fallback (Heuristic)",
             objective_value=round(total_allocated * 10.0, 2),
             runtime_ms=runtime_ms,
             target_phc_id=target_phc_id,
@@ -295,6 +312,7 @@ class OptimizationEngine:
             candidates_evaluated=len(candidates),
             surplus_candidates=candidates,
             constraints_satisfied=[
+                "[DISCLAIMER] Solution generated by greedy heuristic fallback, not MILP solver.",
                 "Safety Stock Invariant: All sources preserve >= 7.0 days reserve post-transfer.",
                 f"Deficit Coverage: {total_allocated:,.0f} units fulfilled.",
             ],
